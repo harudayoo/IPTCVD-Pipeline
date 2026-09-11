@@ -335,8 +335,13 @@ head_ "14. The skills only name gate.sh commands that exist"
 # Documentation drift in the other direction: a skill telling the agent to run
 # a subcommand that was renamed is a pipeline that stops at that phase.
 DRIFT=0
-for c in $(grep -rhoE 'gate\.sh (advance )?[a-z]+' "$SRC"/templates/skills "$SRC"/templates/agents "$SRC"/templates/tiers 2>/dev/null \
-           | sed 's/^gate\.sh //; s/^advance //' | sort -u); do
+# Anchored on the SLASH before the name. Without it, `gate\.sh` also matches the
+# tail of `coverage-gate.sh`, and the very first sibling script added to
+# .claude/scripts/ made this check report a phantom subcommand ('coverage') that
+# no skill had ever named. A drift check that invents drift gets switched off
+# as fast as one that misses it.
+for c in $(grep -rhoE '/gate\.sh (advance )?[a-z]+' "$SRC"/templates/skills "$SRC"/templates/agents "$SRC"/templates/tiers 2>/dev/null \
+           | sed 's|^/gate\.sh ||; s/^advance //' | sort -u); do
   case "$c" in
     idle|plan|test|create|verify|document|show|log|advance) ;;
     *) fail "a skill names a gate.sh command that does not exist" "a known subcommand" "'$c'"; DRIFT=1 ;;

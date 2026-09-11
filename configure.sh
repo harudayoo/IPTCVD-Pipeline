@@ -70,6 +70,27 @@ if grep -q 'NEEDS_REVIEW' "$P" && [ "$ALLOW_INCOMPLETE" = 0 ]; then
   exit 1
 fi
 
+# A markdown table cell cannot contain a `|`. The parser below splits on it, so
+# a value like `vitest run | tee out.txt` silently becomes `vitest run` -- the
+# profile says one thing, the hook is configured with another, and nothing
+# reports a problem. That is the precise failure shape this pipeline exists to
+# remove, sitting in the file every hook is configured FROM.
+#
+# So: detect the extra cell and refuse. A well-formed row is
+# `| label | value | status |`, which awk -F'|' sees as 5 fields (the empty
+# strings either side of the leading and trailing pipes count).
+check_row_shape() {
+  awk -F'|' -v want="$1" '
+    $0 ~ /^\|/ {
+      lbl = $2; gsub(/^[ 	]+|[ 	]+$/, "", lbl)
+      if (lbl == want && NF > 5) {
+        printf "%s", $0
+        exit 1
+      }
+    }' "$P" && return 0
+  return 1
+}
+
 # Pull a value out of the profile's markdown table by row label.
 field() {
   local label="$1"
@@ -98,6 +119,130 @@ TOKEN_FILE="$(field 'Design token file')"
 HAS_UI="$(field 'Has UI')"
 
 [ -n "$TEST_COMMAND" ]  || die "could not read 'Test command' from the profile"
+
+# Refuse a row whose value contains a pipe BEFORE anything is substituted.
+for _lbl in "Dev command" "Test command (non-watching)" "Single-test command"             "Format command (fixes)" "Type-check command" "Build command"             "Dependency audit command" "Source roots" "Front-end root" "Test root"             "Shared surfaces" "Design token file"; do
+  if _row=$(check_row_shape "$_lbl"); then :; else
+    c_red "error: the '$_lbl' row has more cells than a markdown table row can hold."
+    c_dim "  row: $_row"
+    c_dim "  A '|' inside the value splits the cell, so the value is silently truncated"
+    c_dim "  at the pipe and the hook is configured with something you did not write."
+    c_dim "  Put the pipeline into a script and name the script here instead."
+    exit 1
+  fi
+done
+
+
+# ---------------------------------------------------- profile value validation
+#
+# Profile values are substituted into hook SOURCE, and they land in two shapes
+# that fail differently:
+#
+#   EXECUTED   post-edit.sh runs `{{FORMAT_COMMAND}} "$FILE"` on every edit. The
+#              value is shell, unquoted -- it has to be, or a two-word command
+#              like `npx prettier -w` could not work. So a `;` or a `$(...)` in
+#              that field is a second command running on every single edit.
+#
+#   MATCHED    filter-output.sh puts commands inside `case` PATTERNS. A `)` or a
+#              `|` there does not inject anything -- it ends the pattern early
+#              and leaves the file syntactically broken, so the hook dies on
+#              every Bash call and the harness reports a hook error rather than
+#              anything about the actual problem.
+#
+# PROFILE.md is the project owner's own file, confirmed by running each command,
+# so this is not a defence against an attacker who already has commit access.
+# It is a defence against a paste, a stray character, and a hook that silently
+# becomes a syntax error -- which, in a pipeline whose entire claim is that its
+# gates are deterministic, is the expensive failure.
+# A `case` pattern cannot come from a VARIABLE. Bash expands $pat and then
+# treats the result as a single pattern -- the `|` inside it is an ordinary
+# character, not alternation, so a helper taking the pattern as an argument
+# silently matched nothing. It was doing that while eight test cases reported
+# PASS, because a separate bug was rejecting every value for another reason.
+# Two wrongs cancelling out is the worst shape a green suite can have, so the
+# patterns below are written literally, once per field.
+_die_val() {  # _die_val <label> <value> <what is wrong>
+  c_red "error: '$1' contains $3."
+  c_dim "  value: $2"
+  c_dim "  Profile values are substituted into hook SOURCE, so this would leave the"
+  c_dim "  hooks broken, or running something you did not intend, on every edit."
+  c_dim "  Use a plain command; put any chaining into a script and name the script."
+  exit 1
+}
+
+# EXECUTED: post-edit.sh runs `<format command> "$FILE"` on every edit, unquoted
+# -- it has to be, or a two-word command like `npx prettier -w` could not work.
+# A `;`, a backtick or a `$(...)` in that field is a second command running on
+# every single edit.
+for _pair in "Format command (fixes)|$FORMAT_COMMAND" "Type-check command|$TYPECHECK_COMMAND"; do
+  _label="${_pair%%|*}"; _val="${_pair#*|}"
+  case "$_val" in ""|NEEDS_REVIEW|true) continue ;; esac
+  case "$_val" in
+    *[\;\|\&\<\>]*|*'`'*|*'$('*)
+      _die_val "$_label" "$_val" "a shell metacharacter: one of ; | & backtick dollar-paren < >" ;;
+  esac
+done
+
+# MATCHED: filter-output.sh puts these inside `case` PATTERNS. A `)` or a bare
+# `|` there injects nothing -- it ends the pattern early and leaves the hook
+# syntactically broken, so it dies on every Bash call and the harness reports a
+# hook error instead of anything about the real problem.
+#
+# `&&` stays legal: install.sh legitimately builds "composer audit && npm audit",
+# and an ampersand inside a case pattern is an ordinary literal.
+for _pair in "Test command (non-watching)|$TEST_COMMAND" "Build command|$BUILD_COMMAND" \
+             "Dependency audit command|$DEPENDENCY_AUDIT_COMMAND"; do
+  _label="${_pair%%|*}"; _val="${_pair#*|}"
+  case "$_val" in ""|NEEDS_REVIEW|true) continue ;; esac
+  case "$_val" in
+    *'('*|*')'*|*\\*)
+      _die_val "$_label" "$_val" "a parenthesis or a backslash, which breaks a case pattern" ;;
+  esac
+  # A lone `|` breaks the pattern; `||` is shell chaining and is no better here.
+  case "$_val" in
+    *'|'*) _die_val "$_label" "$_val" "a pipe, which ends the case pattern early" ;;
+  esac
+done
+
+# A newline in any of them corrupts the file outright, whichever shape it takes.
+#
+# $'\n', NOT "$(printf '\n')". Command substitution strips trailing newlines,
+# so the latter evaluates to the EMPTY STRING and the guard becomes
+# `case $v in **)` -- which matches every value there is. The first version of
+# this check rejected every legitimate profile in the repo while reporting a
+# precise, confident reason ("contains a line break"). A guard that is wrong in
+# the fail-closed direction is still wrong: this one made configure.sh unusable
+# on a correct profile, which is how a check gets deleted rather than fixed.
+_NL=$'\n'; _CR=$'\r'
+for _pair in "Format command (fixes)|$FORMAT_COMMAND" "Type-check command|$TYPECHECK_COMMAND" \
+             "Test command (non-watching)|$TEST_COMMAND" "Build command|$BUILD_COMMAND" \
+             "Dependency audit command|$DEPENDENCY_AUDIT_COMMAND" "Source roots|$SOURCE_ROOTS" \
+             "Test root|$TEST_ROOT" "Shared surfaces|$SHARED_SURFACES"; do
+  _label="${_pair%%|*}"; _val="${_pair#*|}"
+  case "$_val" in
+    *"$_NL"*|*"$_CR"*)
+      c_red "error: '$_label' contains a line break."
+      exit 1 ;;
+  esac
+done
+
+# Path-ish fields must be paths, not globs or traversals: they are anchored into
+# the gate's own regexes, and a `..` there would widen the guard rather than
+# narrow it.
+for _pair in "Source roots|$SOURCE_ROOTS" "Test root|$TEST_ROOT" "Shared surfaces|$SHARED_SURFACES"; do
+  _label="${_pair%%|*}"; _val="${_pair#*|}"
+  case "$_val" in ""|NEEDS_REVIEW|n/a) continue ;; esac
+  case "$_val" in
+    *..*|*'*'*|*'?'*|/*)
+      c_red "error: '$_label' must be repo-relative directory names, comma-separated."
+      c_dim "  value: $_val"
+      c_dim "  No globs, no '..', no leading '/'. These are compiled into the gate's"
+      c_dim "  path patterns, where a wildcard widens the guard instead of narrowing it."
+      exit 1 ;;
+  esac
+done
+
+
 [ -n "$SOURCE_ROOTS" ]  || die "could not read 'Source roots' from the profile"
 
 # Source roots -> an ERE the hooks can grep with:  "app,src"  ->  "^(app|src)/"
@@ -268,6 +413,14 @@ fi
 # `exit 0` to a hook is the cheapest bypass in the whole pipeline, and nothing
 # in the working tree would look wrong afterwards. This manifest is what makes
 # that edit a visible diff instead of a silent one.
+# Arm the size ratchet against the tree as it is TODAY. Recording it here is
+# what makes it adoptable: the bar applies to what happens next, not to a
+# backlog nobody agreed to fix this week. Without a baseline the first CI run
+# fails on a legacy tree and the check gets deleted rather than fixed.
+if [ "$DRY_RUN" = 0 ] && [ -x "$TARGET/.claude/scripts/ratchet.sh" ]; then
+  ( cd "$TARGET" && bash .claude/scripts/ratchet.sh --update 2>/dev/null )     | sed 's/^/  /' || true
+fi
+
 if [ "$DRY_RUN" = 0 ] && [ -x "$TARGET/.claude/scripts/hook-integrity.sh" ]; then
   ( cd "$TARGET" && bash .claude/scripts/hook-integrity.sh --update >/dev/null 2>&1 )     && c_dim "  recorded .claude/state/hooks.sha256"
 fi

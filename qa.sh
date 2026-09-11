@@ -320,7 +320,7 @@ done < <(git ls-files 2>/dev/null | grep -E '(__pycache__/|\.pyc$|\.pyo$|\.DS_St
 [ "$binbad" = 0 ] && pass "no compiled or OS artifacts tracked under templates/"
 
 # ---------------------------------------------------- 13. hook behaviour
-head_ "13. Hook behaviour (test/hooks.sh)"
+head_ "13. Behaviour suites"
 # qa.sh checks the templates' SHAPE. This is the only thing that checks what
 # they DO -- against the bypasses, not the happy path.
 if [ -f test/hooks.sh ]; then
@@ -331,6 +331,32 @@ if [ -f test/hooks.sh ]; then
   fi
 else
   fail "test/hooks.sh exists"
+fi
+
+# The profile is the file every hook is configured FROM, and its values are
+# substituted into hook source. A value that corrupts a hook has to be refused
+# at configure time, not discovered when the hook dies on the next Bash call.
+if [ -f test/profile-validation.sh ]; then
+  if bash test/profile-validation.sh >/dev/null 2>&1; then
+    pass "configure.sh refuses profile values that would corrupt a hook"
+  else
+    fail "test/profile-validation.sh fails -- run it directly"
+  fi
+else
+  fail "test/profile-validation.sh exists"
+fi
+
+# A standard with no measurement is a preference. The ratchet is what turns the
+# rules' file-size bar into a number, and it has to ratchet in both directions
+# or it is either useless or unadoptable.
+if [ -f test/ratchet.sh ]; then
+  if bash test/ratchet.sh >/dev/null 2>&1; then
+    pass "the size ratchet shrinks, refuses growth, and refuses new crossings"
+  else
+    fail "test/ratchet.sh fails -- run it directly"
+  fi
+else
+  fail "test/ratchet.sh exists"
 fi
 
 printf '\n\033[1m%d passed, %d failed, %d warnings\033[0m\n' "$PASS" "$FAIL" "$WARN"
