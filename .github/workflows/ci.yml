@@ -93,8 +93,17 @@ jobs:
         # places (a guard is not a shell) and the style notes are noise. Real
         # defects -- unquoted expansions, unreachable code, bad test operators --
         # are warnings or above.
+        #
+        # Suppressions, each with a reason:
+        #   SC1090/SC1091  sourcing a path shellcheck cannot follow (_guard.sh,
+        #                  manifest.conf) -- resolved at runtime, by design.
+        #   SC2294         install.sh's run() evals a command STRING on purpose:
+        #                  --dry-run prints the very string it would otherwise
+        #                  execute, which is the point of the helper. Rewriting
+        #                  it to use arrays would mean building each command
+        #                  twice and letting the two drift.
         run: |
-          shellcheck -S warning -e SC1090,SC1091 \
+          shellcheck -S warning -e SC1090,SC1091,SC2294 \
             install.sh configure.sh verify.sh qa.sh \
             test/*.sh templates/common/scripts/*.sh
           # The hook templates carry {{PLACEHOLDERS}} that are not valid shell
