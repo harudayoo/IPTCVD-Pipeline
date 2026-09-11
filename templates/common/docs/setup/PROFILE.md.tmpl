@@ -18,8 +18,19 @@ A field is not CONFIRMED until its command has been executed successfully.
 | Source roots | {{SOURCE_ROOTS}} | |
 | Front-end root | {{FRONTEND_ROOT}} | |
 | Test root | {{TEST_ROOT}} | |
+| Shared surfaces | {{SHARED_SURFACES}} | |
 | Design token file | {{TOKEN_FILE}} | |
 | Has UI | {{HAS_UI}} | |
+
+## Shared surfaces
+
+Comma-separated directories, relative to the repo root, where a NEW file has to
+state what it reuses before it is created -- components, pages, services: the
+places a fifth near-duplicate of an existing thing tends to appear. Editing an
+existing file in them is never gated.
+
+Leave blank to switch the reuse gate off. That is a decision, not a default:
+"reuse what is already here" stays advisory until something asks.
 
 ## Verification log
 Run every command above and record its exit code here.

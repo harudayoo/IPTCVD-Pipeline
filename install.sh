@@ -206,7 +206,7 @@ if [ "$UNINSTALL" = 1 ]; then
     for r in $TIER_RULES; do
       backup_if_exists "$TARGET/.claude/rules/$r.md"; run "rm -f '$TARGET/.claude/rules/$r.md'"
     done
-    for p in .claude/hooks .claude/state .claude/workflows; do
+    for p in .claude/hooks .claude/scripts .claude/state .claude/workflows; do
       backup_if_exists "$TARGET/$p"; run "rm -rf '$TARGET/$p'"
     done
     # Drop the now-empty studio directories, but never a directory someone
@@ -229,7 +229,7 @@ if [ "$UNINSTALL" = 1 ]; then
     c_dim "  third-party under .claude/agents or .claude/skills goes too — it is"
     c_dim "  all in the backup."
     for p in .claude/agents .claude/skills .claude/rules .claude/hooks \
-             .claude/state .claude/workflows; do
+             .claude/scripts .claude/state .claude/workflows; do
       backup_if_exists "$TARGET/$p"
       run "rm -rf '$TARGET/$p'"
     done
@@ -269,6 +269,7 @@ detect_stack() {
   FORMAT_CMD="NEEDS_REVIEW"; TYPECHECK_CMD="NEEDS_REVIEW"; BUILD_CMD="NEEDS_REVIEW"
   SOURCE_ROOTS="NEEDS_REVIEW"; FRONTEND_ROOT="NEEDS_REVIEW"; TEST_ROOT="NEEDS_REVIEW"
   TOKEN_FILE="NEEDS_REVIEW"; AUDIT_CMD="NEEDS_REVIEW"
+  SHARED_SURFACES=""
 
   if [ -f "$TARGET/composer.json" ]; then
     STACK="PHP"; PKG="composer"
@@ -340,6 +341,18 @@ detect_stack() {
     TEST_ROOT="tests"
     [ "$AUDIT_CMD" = "NEEDS_REVIEW" ] && AUDIT_CMD="pip-audit"
   fi
+
+  # Directories where a fifth near-duplicate of an existing thing tends to
+  # appear. Guessed from what is actually on disk; the profile marks it for
+  # confirmation like every other detected value.
+  for d in components Components pages Pages services Services hooks lib; do
+    for r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' ') "$FRONTEND_ROOT"; do
+      case "$r" in ""|NEEDS_REVIEW) continue ;; esac
+      [ -d "$TARGET/$r/$d" ] || continue
+      case ",$SHARED_SURFACES," in *",$r/$d,"*) continue ;; esac
+      SHARED_SURFACES="${SHARED_SURFACES:+$SHARED_SURFACES,}$r/$d"
+    done
+  done
 
   [ -f "$TARGET/go.mod" ]    && { STACK="Go";   TEST_CMD="go test ./..."; BUILD_CMD="go build ./..."
                                    [ "$AUDIT_CMD" = "NEEDS_REVIEW" ] && AUDIT_CMD="govulncheck ./..."; }
@@ -427,7 +440,7 @@ fi
 
 # --------------------------------------------------------------- directories
 c_grn "1. Creating directories"
-for d in .claude/agents .claude/skills .claude/rules .claude/hooks \
+for d in .claude/agents .claude/skills .claude/rules .claude/hooks .claude/scripts \
          .claude/state .claude/agent-memory ${TIER_EXTRA_CLAUDE_DIRS:-}; do
   run "mkdir -p '$TARGET/$d'"
 done
@@ -472,7 +485,14 @@ c_dim "  $n_rules rules"
 
 run "cp '$SRC/templates/common/hooks/'*.sh '$TARGET/.claude/hooks/'"
 run "chmod +x '$TARGET/.claude/hooks/'*.sh"
-c_dim "  4 hooks"
+n_hooks=$(find "$SRC/templates/common/hooks" -name '_*' -prune -o -name '*.sh' -print | wc -l | tr -d ' ')
+c_dim "  $n_hooks hooks"
+
+# The gate's own tooling. gate.sh records the plan the hooks read;
+# hook-integrity.sh is what makes disarming them visible rather than silent.
+run "cp '$SRC/templates/common/scripts/'*.sh '$TARGET/.claude/scripts/'"
+run "chmod +x '$TARGET/.claude/scripts/'*.sh"
+c_dim "  $(find "$SRC/templates/common/scripts" -name '*.sh' | wc -l | tr -d ' ') scripts"
 
 if [ ! -f "$TARGET/.claude/state/gate.json" ] || [ "$FORCE" = 1 ]; then
   backup_if_exists "$TARGET/.claude/state/gate.json"
@@ -506,6 +526,7 @@ render() {  # render <template> <destination>
     -e "s|{{TYPECHECK_COMMAND}}|$(esc_repl "$TYPECHECK_CMD")|g" \
     -e "s|{{BUILD_COMMAND}}|$(esc_repl "$BUILD_CMD")|g" \
     -e "s|{{DEPENDENCY_AUDIT_COMMAND}}|$(esc_repl "$AUDIT_CMD")|g" \
+    -e "s|{{SHARED_SURFACES}}|$(esc_repl "$SHARED_SURFACES")|g" \
     -e "s|{{SOURCE_ROOTS}}|$(esc_repl "$SOURCE_ROOTS")|g" \
     -e "s|{{FRONTEND_ROOT}}|$(esc_repl "$FRONTEND_ROOT")|g" \
     -e "s|{{TEST_ROOT}}|$(esc_repl "$TEST_ROOT")|g" \
@@ -607,7 +628,7 @@ fi
 
 # ------------------------------------------------------------------ report
 echo
-c_grn "Installed: $TIER_NAME  ($n_agents agents · $n_skills skills · $n_rules rules · 4 hooks)"
+c_grn "Installed: $TIER_NAME  ($n_agents agents · $n_skills skills · $n_rules rules · $n_hooks hooks)"
 [ -d "$BACKUP" ] && c_dim "Backup: ${BACKUP#$TARGET/}"
 echo
 c_bold "Phases"
@@ -638,7 +659,7 @@ NEXT STEPS
   4. In Claude Code:
         /doctor      # duplicate agents, oversized memory
         /context     # pre-prompt total should be under ~15%
-        /hooks       # confirm all four registered
+        /hooks       # confirm every studio hook is registered
 
   5. Seed agent memory (read-only passes -- see README).
 

@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# Reads and writes .claude/state/gate.json -- the plan record the hooks enforce.
+#
+# The gate began as a boolean ({"phase":"create"}) and certified only that a
+# plan EXISTED, never what it said. The two phases with an artifact but nothing
+# gate-readable are reliably the two that get skipped -- IDEA, because stating
+# the problem feels like overhead once you can already see the fix, and TEST,
+# because writing the test after the code still produces a green suite. A test
+# written after the implementation is worse than no test: it reads as coverage
+# while having never once failed.
+#
+# So the phases now carry their answer in the same place the phase name does.
+#
+#   bash .claude/scripts/gate.sh create \
+#     --problem "National finance summed every chapter's dues into the total" \
+#     --red     "DuesTest::national_excludes_chapter fails: expected 0, got 41250" \
+#     [--reuse  "extend DuesScope; it already models the two tiers"] \
+#     [--deps   "no date helper here; hand-rolled the same parser in 3 places"]
+#
+#   bash .claude/scripts/gate.sh verify    # source edits stay open for fixes
+#   bash .claude/scripts/gate.sh idle      # document phase -- reset, so the
+#                                          # default is blocked again
+#   bash .claude/scripts/gate.sh show      # what is on record right now
+#   bash .claude/scripts/gate.sh log       # the decision history
+#
+# --reuse is required to CREATE a file under a shared-surface directory.
+# --deps is required to edit a dependency manifest.
+#
+# --red takes either the evidence that a test went red before the code existed,
+# or an honest "n/a: <reason>" -- a design token has no failing test to write.
+# The hook cannot judge testability, so it requires the answer to be STATED
+# rather than guessing; the reviewing agent checks the answer against the diff.
+set -uo pipefail
+
+cd "$(dirname "$0")/../.." || exit 1
+GATE=".claude/state/gate.json"
+
+# JSON-escape: backslash and quote, then control characters that would break
+# the file. These values arrive from a human sentence, not a machine.
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'; }
+
+usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# Dense length: whitespace stripped, so "   ok   " does not read as eight
+# characters of content.
+_dense() { printf '%s' "$1" | tr -d '[:space:]'; }
+
+CMD="${1:-show}"
+[ $# -gt 0 ] && shift
+
+case "$CMD" in
+  idle|plan|test|document)
+    mkdir -p "$(dirname "$GATE")"
+    printf '{"phase":"%s"}\n' "$([ "$CMD" = "idle" ] && echo idle || echo "$CMD")" > "$GATE"
+    echo "gate: $CMD — source edits are blocked."
+    ;;
+
+  show)
+    if [ -f "$GATE" ]; then cat "$GATE"; else echo "no $GATE (treated as idle)"; fi
+    ;;
+
+  log)
+    LOG=".claude/state/gate-log.tsv"
+    if [ ! -f "$LOG" ]; then echo "no decisions recorded yet"; exit 0; fi
+    printf '%-22s %-11s %-6s %-8s %s\n' WHEN HOOK VERDICT PHASE TARGET
+    tail -"${1:-40}" "$LOG" | while IFS=$'\t' read -r ts hook verdict phase target reason; do
+      printf '%-22s %-11s %-6s %-8s %s %s\n' "$ts" "$hook" "$verdict" "$phase" "$target" "${reason:+($reason)}"
+    done
+    echo
+    echo "blocks: $(grep -c 'BLOCK' "$LOG" 2>/dev/null || echo 0)   allows: $(grep -c 'ALLOW' "$LOG" 2>/dev/null || echo 0)"
+    ;;
+
+  create|verify)
+    PROBLEM=""; RED=""; VAULT=""; REUSE=""; DEPS=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --problem) shift; PROBLEM="${1:-}" ;;
+        --red)     shift; RED="${1:-}" ;;
+        --vault)   shift; VAULT="${1:-}" ;;
+        --reuse)   shift; REUSE="${1:-}" ;;
+        --deps)    shift; DEPS="${1:-}" ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown flag: $1" >&2; usage >&2; exit 1 ;;
+      esac
+      shift
+    done
+
+    MISSING=""
+    [ -z "$PROBLEM" ] && MISSING="--problem"
+    [ -z "$RED" ] && MISSING="${MISSING:+$MISSING and }--red"
+    if [ -n "$MISSING" ]; then
+      echo "refusing to open the gate: $MISSING missing." >&2
+      echo "  --problem is the IDEA phase; --red is the TEST phase. Both are one sentence." >&2
+      echo "  No failing test to point at? Say so: --red \"n/a: <why>\"" >&2
+      exit 1
+    fi
+
+    # Both must carry an ANSWER, not a keystroke. The hook can only check that
+    # something was stated; this checks a SENTENCE was stated. `n/a` on its own
+    # is the specific evasion worth naming: the entire value of --red is that a
+    # change with no failing test has to say WHY, and a bare `--red n/a` turns
+    # the phase back into the box-tick it replaced.
+    P_C=$(_dense "$PROBLEM")
+    if [ ${#P_C} -lt 12 ]; then
+      echo "refusing: --problem is ${#P_C} characters of content." >&2
+      echo '  The IDEA phase is what BREAKS and what is out of scope — a sentence, not a token.' >&2
+      exit 1
+    fi
+    case $(printf '%s' "$RED" | tr '[:upper:]' '[:lower:]') in
+      n/a*)
+        REASON="${RED#*:}"
+        [ "$REASON" = "$RED" ] && REASON=""   # no colon at all
+        R_C=$(_dense "$REASON")
+        if [ ${#R_C} -lt 8 ]; then
+          echo 'refusing: --red "n/a" without a reason is not an answer.' >&2
+          echo '  Use: --red "n/a: <why this change has no failing test to point at>"' >&2
+          exit 1
+        fi
+        ;;
+      *)
+        R_C=$(_dense "$RED")
+        if [ ${#R_C} -lt 12 ]; then
+          echo "refusing: --red is ${#R_C} characters of content." >&2
+          echo '  The TEST phase names the test that fails NOW, or says "n/a: <why>".' >&2
+          exit 1
+        fi
+        ;;
+    esac
+
+    # --reuse and --deps are the same shape of answer and get the same floor.
+    # A one-word "yes" here is the box-tick the reuse gate exists to refuse.
+    for pair in "reuse:$REUSE" "deps:$DEPS"; do
+      name="${pair%%:*}"; val="${pair#*:}"
+      [ -n "$val" ] || continue
+      V_C=$(_dense "$val")
+      [ ${#V_C} -ge 12 ] && continue
+      echo "refusing: --$name is ${#V_C} characters of content." >&2
+      echo "  Name what you checked first and why it does not cover this — e.g." >&2
+      echo "  \"no date helper here; hand-rolled the same parser in 3 places already\"." >&2
+      exit 1
+    done
+
+    mkdir -p "$(dirname "$GATE")"
+    {
+      printf '{"phase":"%s"' "$CMD"
+      printf ',"problem":"%s"' "$(esc "$PROBLEM")"
+      printf ',"red":"%s"' "$(esc "$RED")"
+      [ -n "$VAULT" ] && printf ',"vault":"%s"' "$(esc "$VAULT")"
+      [ -n "$REUSE" ] && printf ',"reuse":"%s"' "$(esc "$REUSE")"
+      [ -n "$DEPS" ] && printf ',"deps":"%s"' "$(esc "$DEPS")"
+      printf ',"updated_at":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '}\n'
+    } > "$GATE"
+    echo "gate: $CMD — source edits unblocked. Reset at handoff: bash .claude/scripts/gate.sh idle"
+    ;;
+
+  -h|--help) usage ;;
+  *) echo "unknown command: $CMD" >&2; usage >&2; exit 1 ;;
+esac

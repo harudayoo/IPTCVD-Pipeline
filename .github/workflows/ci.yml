@@ -1,0 +1,158 @@
+name: CI
+
+# qa.sh says "run it in CI" and test/integration.sh says "before a release".
+# Nothing ran either, so the repository whose entire pitch is that gates close
+# on evidence had no gate of its own. This is that gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hooks:
+    name: Hook behaviour · the bypass suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hook behaviour against the bypass shapes
+        # The happy path passing is the symptom, not the evidence. Six of seven
+        # path spellings once walked past a closed gate while verify.sh
+        # reported PASS, because it fed the one relative spelling that worked.
+        run: bash test/hooks.sh
+
+  hooks-no-jq:
+    name: Hook behaviour · without jq
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove jq, then run the same suite
+        # Every hook here has three JSON parsers and only ONE of them runs on
+        # any given machine. The branch CI takes and the branch a laptop takes
+        # must agree byte for byte -- a filter bug that only appeared on the jq
+        # branch once made every check in this repo red for weeks without
+        # anyone seeing it locally.
+        run: |
+          sudo rm -f "$(command -v jq)" || true
+          command -v jq && { echo "jq still on PATH" >&2; exit 1; } || true
+          bash test/hooks.sh
+
+  hooks-broken-parsers:
+    name: Hook behaviour · parsers present but broken
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shadow jq and python with stubs that exit 127
+        # The case that matters more than "absent", and the one that found real
+        # bugs: a parser that EXISTS and FAILS. `command -v jq` succeeding proves
+        # a file is on PATH, not that it runs -- a jq built against the wrong
+        # libc, a shim, a half-finished install. Before the fall-through was
+        # added, that returned an empty parse, and every caller treats empty
+        # input as "nothing to check" and exits 0.
+        #
+        # This configuration also forces the last-resort regex parser, which is
+        # the weakest and least exercised of the three. It is what caught
+        # gate_read_all emitting no line for an absent key -- which did not read
+        # as empty, it SHIFTED every later value up by one and refused a plan
+        # for a note that was plainly there.
+        run: |
+          mkdir -p /tmp/brokenbin
+          for t in jq python python3; do
+            printf '#!/bin/sh\nexit 127\n' > "/tmp/brokenbin/$t"
+            chmod +x "/tmp/brokenbin/$t"
+          done
+          PATH="/tmp/brokenbin:$PATH" bash test/hooks.sh
+
+  templates:
+    name: Templates · qa.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Template integrity
+        run: bash qa.sh
+
+  shellcheck:
+    name: Shell · shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: shellcheck
+        # -S warning, not error: these scripts are deliberately quote-naive in
+        # places (a guard is not a shell) and the style notes are noise. Real
+        # defects -- unquoted expansions, unreachable code, bad test operators --
+        # are warnings or above.
+        #
+        # Suppressions, each with a reason:
+        #   SC1090/SC1091  sourcing a path shellcheck cannot follow (_guard.sh,
+        #                  manifest.conf) -- resolved at runtime, by design.
+        #   SC2294         install.sh's run() evals a command STRING on purpose:
+        #                  --dry-run prints the very string it would otherwise
+        #                  execute, which is the point of the helper. Rewriting
+        #                  it to use arrays would mean building each command
+        #                  twice and letting the two drift.
+        run: |
+          shellcheck -S warning -e SC1090,SC1091,SC2294 \
+            install.sh configure.sh verify.sh qa.sh \
+            test/*.sh templates/common/scripts/*.sh
+          # The hook templates carry {{PLACEHOLDERS}} that are not valid shell
+          # until configure.sh substitutes them, so they are checked as the
+          # test fixture renders them instead of in raw form.
+          tmp=$(mktemp -d)
+          for f in templates/common/hooks/*.sh; do
+            sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
+                -e 's|{{SHARED_SURFACE_REGEX}}|^(src/components)/|g' \
+                -e 's|{{TEST_ROOT}}|tests|g' \
+                -e 's|{{TEST_COMMAND}}|npm test|g' \
+                -e 's|{{BUILD_COMMAND}}|npm run build|g' \
+                -e 's|{{TYPECHECK_COMMAND}}|tsc --noEmit|g' \
+                -e 's|{{DEPENDENCY_AUDIT_COMMAND}}|npm audit|g' \
+                -e 's|{{FORMAT_COMMAND}}|prettier -w|g' \
+                -e 's|{{FORMAT_GLOB}}|*.ts|g' \
+                -e 's|{{TYPECHECK_GLOB}}|*.ts|g' \
+                "$f" > "$tmp/$(basename "$f")"
+          done
+          shellcheck -S warning -e SC1090,SC1091 "$tmp"/*.sh
+
+  lifecycle:
+    name: Lifecycle · install, configure, tier switch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Integration suite
+        run: bash test/integration.sh
+
+  secrets:
+    name: Secrets · gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A secret matters as much for when it ENTERED as for whether it is
+          # still present; a shallow clone can only see the tip.
+          fetch-depth: 0
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.18.4
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo install -m 755 /tmp/gitleaks /usr/local/bin/gitleaks
+      - name: gitleaks detect
+        # --redact: a finding must not print the credential into a CI log, which
+        # would be a second disclosure on top of the first.
+        run: gitleaks detect --source . --redact --verbose --exit-code 1

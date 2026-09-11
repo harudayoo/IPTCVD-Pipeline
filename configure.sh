@@ -93,6 +93,7 @@ DEPENDENCY_AUDIT_COMMAND="$(field 'Dependency audit command')"
 SOURCE_ROOTS="$(field 'Source roots')"
 FRONTEND_ROOT="$(field 'Front-end root')"
 TEST_ROOT="$(field 'Test root')"
+SHARED_SURFACES="$(field 'Shared surfaces')"
 TOKEN_FILE="$(field 'Design token file')"
 HAS_UI="$(field 'Has UI')"
 
@@ -101,6 +102,38 @@ HAS_UI="$(field 'Has UI')"
 
 # Source roots -> an ERE the hooks can grep with:  "app,src"  ->  "^(app|src)/"
 SOURCE_ROOTS_REGEX="^($(printf '%s' "$SOURCE_ROOTS" | tr -d ' ' | tr ',' '|'))/"
+
+# Shared surfaces -> an ERE the gate can grep with:
+#   "src/components,src/services"  ->  "^(src/components|src/services)/"
+#
+# Creating a file under one of these has to state what it reuses. Editing an
+# existing file never does. An empty value switches the reuse gate off, and the
+# hook treats an empty pattern as "no shared surfaces" rather than as "match
+# everything" -- an unset guard that matched everything would block the whole
+# project and get itself deleted within the hour.
+# A TEST ROOT that sits INSIDE a source root is a gate that disables itself.
+# `Test root: src` with `Source roots: src` makes the allow rule match every
+# file under src/, so the phase gate never fires on anything -- and the install
+# still reports success, which is the exact failure mode this repo exists to
+# remove. Drop the location rule when it collides and say so; test FILES are
+# still recognised by the shape of their name, so the TEST phase keeps working.
+for _r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' '); do
+  case "$TEST_ROOT" in
+    "$_r"|"$_r"/*)
+      c_yel "  warning: test root '$TEST_ROOT' is inside source root '$_r'."
+      c_dim "    A location-based allow rule there would ungate the whole root, so it"
+      c_dim "    is dropped. Test files are still matched by filename (*_test.*,"
+      c_dim "    *.test.*, *.spec.*, test_*), which is what Go/Rust/JS layouts need."
+      TEST_ROOT=""
+      ;;
+  esac
+done
+
+if [ -n "$SHARED_SURFACES" ]; then
+  SHARED_SURFACE_REGEX="^($(printf '%s' "$SHARED_SURFACES" | tr -d ' ' | tr ',' '|'))/"
+else
+  SHARED_SURFACE_REGEX=""
+fi
 
 # Globs for the rules
 BACKEND_GLOB="${SOURCE_ROOTS%%,*}/**/*"
@@ -119,6 +152,7 @@ c_dim "  format:    $FORMAT_COMMAND"
 c_dim "  typecheck: $TYPECHECK_COMMAND"
 c_dim "  audit:     $DEPENDENCY_AUDIT_COMMAND"
 c_dim "  protected: $SOURCE_ROOTS_REGEX"
+c_dim "  reuse gate: ${SHARED_SURFACE_REGEX:-(off — none declared)}"
 echo
 
 # Literal string replacement via awk. No sed delimiters, so values may safely
@@ -158,6 +192,8 @@ subst() {
     "DEPENDENCY_AUDIT_COMMAND=$DEPENDENCY_AUDIT_COMMAND" \
     "SOURCE_ROOTS=$SOURCE_ROOTS" \
     "SOURCE_ROOTS_REGEX=$SOURCE_ROOTS_REGEX" \
+    "SHARED_SURFACES=$SHARED_SURFACES" \
+    "SHARED_SURFACE_REGEX=$SHARED_SURFACE_REGEX" \
     "FRONTEND_ROOT=$FRONTEND_ROOT" \
     "TEST_ROOT=$TEST_ROOT" \
     "TOKEN_FILE=$TOKEN_FILE" \
@@ -226,6 +262,16 @@ if [ "$DRY_RUN" = 0 ] && printf '%s' "$HAS_UI" | grep -qi '^no'; then
   [ -n "$dropped" ] && c_yel "  no UI: removed$dropped"
 fi
 
+# Record what the enforcement layer IS, now that it is fully substituted.
+# gate-check.sh allows every write under .claude/, which it must -- a session
+# has to be able to repair a broken install. The cost is that appending
+# `exit 0` to a hook is the cheapest bypass in the whole pipeline, and nothing
+# in the working tree would look wrong afterwards. This manifest is what makes
+# that edit a visible diff instead of a silent one.
+if [ "$DRY_RUN" = 0 ] && [ -x "$TARGET/.claude/scripts/hook-integrity.sh" ]; then
+  ( cd "$TARGET" && bash .claude/scripts/hook-integrity.sh --update >/dev/null 2>&1 )     && c_dim "  recorded .claude/state/hooks.sha256"
+fi
+
 echo
 LEFT=$(grep -rl '{{[A-Z_]*}}' "$TARGET/.claude" "$TARGET/CLAUDE.md" 2>/dev/null || true)
 if [ -n "$LEFT" ]; then
@@ -235,4 +281,4 @@ else
 fi
 echo
 c_dim "Next: open Claude Code and run /doctor, /hooks, /context."
-c_dim "Then run the five hook tests in the README before trusting the gate."
+c_dim "Then prove the gate fires: ./verify.sh --target ."

@@ -156,7 +156,14 @@ printf '{"phase":"plan"}' > $G
 [ "$(rc x '{"tool_input":{"file_path":"docs/specs/a/idea.md"}}')" = 0 ] && ok "allows docs/ during plan" || no "blocked docs/"
 [ "$(rc x '{"tool_input":{"file_path":"tests/a.test.ts"}}')" = 0 ] && ok "allows tests/ during plan" || no "blocked tests/"
 [ "$(rc x '{"tool_input":{"file_path":"sandbox/proto.tsx"}}')" = 0 ] && ok "allows sandbox/ outside source roots (DESIGN-STACK 4)" || no "blocked sandbox/"
-printf '{"phase":"create"}' > $G
+rcb() { printf '%s' "$2" | bash .claude/hooks/bash-gate.sh >/dev/null 2>&1; echo $?; }
+[ "$(rcb x '{"tool_input":{"command":"sed -i s/a/b/ src/pay.ts"}}')" = 2 ] \
+  && ok "blocks a shell write to src/ during plan" || no "shell write to src/ walked through"
+[ "$(rcb x '{"tool_input":{"command":"cat src/pay.ts"}}')" = 0 ] \
+  && ok "allows an ordinary read during plan" || no "blocked an ordinary read"
+# The gate wants the IDEA and TEST answers, not just a phase name: a boolean
+# gate certifies that a plan exists and never what it said.
+printf '{"phase":"create","problem":"integration fixture: pay.ts stands in for real source","red":"n/a: synthetic fixture with no behaviour to pin"}' > $G
 [ "$(rc x '{"tool_input":{"file_path":"src/pay.ts"}}')" = 0 ] && ok "allows src/ during create" || no "blocked src/ during create"
 printf '%s' "$SAVED" > $G
 cd "$S" >/dev/null || exit 1

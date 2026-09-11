@@ -14,10 +14,10 @@ the verification fan-out and the token budget that plan can actually afford:
 | **Max** | 11 | 9 | 6 | 3 parallel, read-only | + proposal & judge | monthly `/report` |
 | **Max 20x** | 24 | 14 | 7 | 5 parallel, read-only | + agent teams / workflows | `/studio-report` on OTel |
 
-All three share the same enforcement layer: four hooks, path-scoped rules, a
-committed gate file, and agent memory in version control. The tiers differ in
-how many specialists exist and how wide the verification fan-out is — never in
-how strict the gates are.
+All three share the same enforcement layer: five hooks, path-scoped rules, a
+committed gate file that carries the plan's *content*, and agent memory in
+version control. The tiers differ in how many specialists exist and how wide the
+verification fan-out is — never in how strict the gates are.
 
 ---
 
@@ -35,6 +35,36 @@ Three claims, and the whole repo is built around them:
 3. **"Done" is a claim, not evidence.** The failure mode that kills spec-driven
    setups is accepting an agent's assertion of completion. Every gate here
    demands an artifact — a passing run, a screenshot, a report file.
+4. **A guard that has not been tested against its bypasses is decoration.** The
+   first three claims are only worth what the enforcement layer is worth, and a
+   hook that never fires produces exactly the same green output as a hook that
+   works. So every guard in here ships with the bypasses that defeated it, in
+   `test/hooks.sh`, and every assertion in that suite is checked to be capable
+   of going red.
+
+### What claim 4 cost, in this repo
+
+These are measured, not hypothetical. With the gate CLOSED, against the
+pre-2.1 `gate-check.sh`:
+
+| Spelling of the same file | Verdict |
+|---|---|
+| `src/services/dues.ts` (relative — the only one tested) | blocked |
+| `/home/u/proj/src/services/dues.ts` — **what Claude Code actually sends** | allowed |
+| `C:\Users\u\proj\src\services\dues.ts` | allowed |
+| `./src/services/dues.ts` | allowed |
+| `docs/../src/services/dues.ts` — an allow rule used as a prefix | allowed |
+| `src/services/LatestReport.ts` — contains "test" | allowed |
+| `src/http/InspectorController.ts` — contains "spec" | allowed |
+
+`verify.sh` reported PASS on all of it, because it fed the one spelling that
+worked. Separately: `gate-check` was registered on `Edit|Write` only, so
+`sed -i`, `cat >`, `cp`, `npm i` and a `python` one-liner each walked straight
+past every gate; and `filter-output`'s `cmd | grep | head` rewrite returned
+**exit 0 for a failing test suite**, which is the evidence claim 3 rests on,
+inverted by the tool meant to produce it.
+
+All of it is fixed, and all of it is now a test.
 
 ---
 
@@ -201,13 +231,28 @@ Then, inside Claude Code:
 /context     # pre-prompt total should sit under ~15% of the window
 ```
 
-### Three test layers
+### Four test layers
 
 | Script | Checks | Run it |
 |---|---|---|
-| `./verify.sh --target .` | one **install** — hooks fire, inventory matches the tier, budget, hook audit | after every install, configure, or hook edit |
-| `./qa.sh` | the **templates** — frontmatter, manifest integrity, placeholder coverage, docs-vs-manifest drift | before changing this repo, and in CI |
+| `./verify.sh --target .` | one **install** — hooks fire on the spellings that ship, inventory matches the tier, budget, hook audit | after every install, configure, or hook edit |
+| `./test/hooks.sh` | what the hooks **do** — every bypass shape, both doors, exit-status preservation | after touching any hook |
+| `./qa.sh` | the **templates** — frontmatter, manifest integrity, placeholder coverage, guard hygiene, docs drift | before changing this repo, and in CI |
 | `./test/integration.sh` | the **lifecycle** — six stacks, upgrade, tier switch, uninstall, degraded environments | before a release |
+
+`test/hooks.sh` is the one that matters most and the one that did not exist.
+It builds a synthetic project, substitutes the placeholders the way
+`configure.sh` would, and asserts 76 behaviours — the bypass matrix above,
+twenty shell-write forms that must block, eleven everyday commands that must
+not, the two allowlist-disarm tokens, and the filter's exit status in both
+directions. Its own assertions are mutation-checked: restoring the pre-2.1
+`gate-check.sh` turns 19 of them red.
+
+All of it runs in CI on three separate jobs — with `jq`, without `jq`, and with
+neither `jq` nor `python` — because each hook has three JSON parsers and only
+**one** of them runs on any given machine. The branch CI takes and the branch
+your laptop takes have to agree byte for byte; a filter bug confined to the `jq`
+branch is invisible locally and red on every push.
 
 `qa.sh` is deliberately strict about failures that are invisible at install time
 and expensive later: an agent whose `name:` does not match its filename never
@@ -223,10 +268,12 @@ placeholder nothing substitutes leaves a hook inert forever.
 ├── agents/          the tier's roster
 ├── skills/          the tier's playbooks
 ├── rules/           path-scoped standards, loaded only when a match is read
-├── hooks/           gate-check, filter-output, post-edit, doc-check
+├── hooks/           gate-check, bash-gate, filter-output, post-edit, doc-check
+├── scripts/         gate.sh (records the plan), hook-integrity.sh
 ├── agent-memory/    committed — this is the institutional memory
 ├── workflows/       Max 20x only
-└── state/           gate.json, studio.json, doc-map.json
+└── state/           gate.json, studio.json, doc-map.json,
+                     hooks.sha256, gate-log.tsv
 docs/
 ├── setup/           PROFILE.md
 ├── adr/             TEMPLATE.md
@@ -292,14 +339,42 @@ scan work, **sonnet** for building, **opus** for irreversible decisions and
 adversarial reasoning. The installer prints which agents are on Opus, because
 that is where the cost is.
 
-### The four hooks — identical on every tier
+### The five hooks — identical on every tier
 
 | Hook | Event | Behaviour on misconfiguration |
 |---|---|---|
 | `gate-check` | PreToolUse (Edit/Write) | **Fails closed** for protected source, open for everything else |
+| `bash-gate` | PreToolUse (Bash) | **Fails closed** for a parse failure naming a guarded root; open otherwise |
 | `filter-output` | PreToolUse (Bash) | Fails open — a broken filter must never block work |
 | `post-edit` | PostToolUse (Edit/Write) | Fails open |
 | `doc-check` | Stop | Fails open |
+
+`bash-gate` is the other door. `gate-check` is registered on `Edit|Write`, so
+without it the entire pipeline is one `sed -i` away from irrelevant — and an
+agent writing through the shell is not an exotic case, it is the common one. It
+does not re-implement the gate: it extracts the write *targets* from the command
+and hands each to `gate-check.sh`, so there is one rulebook and one block
+message, and adding a key covers both doors at once. It recognises redirects
+(`>`, `>>`, `>|`, `&>`), `sed -i`, `perl/ruby -i`, `tee`, `sponge`, `cp/mv/ln/
+rsync/install` (including `-t DIR`), `rm`, `dd of=`, `git checkout/restore/
+apply/mv/rm/clean`, `patch`, awk redirects, interpreter writes, and the
+manifest-rewriting forms of `npm`/`pnpm`/`yarn`/`composer`/`cargo`/`go`/`pip`.
+It fails **open** on anything it cannot parse, because a wrong block costs a
+retry on every unrelated command — with one exception: a payload it cannot parse
+at all that plainly names a guarded root is refused rather than guessed at.
+
+There is deliberately **no exemption list** in it. The obvious one — keep the
+pipeline's own tooling runnable while the gate is closed — is matched by
+substring against a string the caller fully controls, so appending a trailing
+comment disables the whole shell gate in one token:
+
+```bash
+sed -i 's/x/y/' src/app.ts   # .claude/hooks/
+```
+
+It was also unnecessary: the scripts are invoked as `bash .claude/scripts/…`,
+and `bash` is not a program the hook extracts targets from. The safest allowlist
+is the one you can delete. Both forms are in `test/hooks.sh`.
 
 `filter-output` is the largest token saving here: it rewrites test and build
 commands so only failures return to the model, turning tens of thousands of
@@ -313,6 +388,86 @@ Heavy MCP servers are declared **inline in one agent's frontmatter**, never in
 Those tool definitions never enter your main session. This is worth several
 thousand tokens per session and is the reason this is an install script rather
 than a Claude Code plugin — plugin subagents ignore the `mcpServers` field.
+
+---
+
+## The gate carries the plan, not just its name
+
+A gate whose whole state is `{"phase":"create"}` certifies that a plan exists.
+It does not certify what the plan said — and the two phases with an artifact but
+nothing gate-readable are reliably the two that get skipped. IDEA, because
+stating the problem feels like overhead once you can already see the fix. TEST,
+because writing the test *after* the code still produces a green suite, and a
+test that has never failed reads as coverage while proving nothing.
+
+So the gate carries the answers:
+
+```bash
+bash .claude/scripts/gate.sh create \
+  --problem "National finance summed every chapter's dues into the total" \
+  --red     "DuesTest::national_excludes_chapter fails: expected 0, got 41250"
+```
+
+| Key | Required when | Answers |
+|---|---|---|
+| `problem` | every guarded edit | what breaks, and what is out of scope |
+| `red` | every guarded edit | the test failing *now*, or `"n/a: <why>"` |
+| `reuse` | **creating** a file in a shared-surface directory | reuse X / extend X / new because X cannot Y |
+| `deps` | editing a dependency manifest | what you checked first, and why it does not cover this |
+
+`gate.sh` refuses a keystroke: a one-word `--problem`, or a bare `--red n/a`
+with no reason, is rejected. The hook cannot judge whether a change is testable,
+so it does not try — it requires the answer to be **stated**, and the reviewing
+agent checks the stated answer against the diff.
+
+`reuse` exists because "reuse what is already here" stays advisory until
+something asks. Declare the directories where near-duplicates breed —
+components, pages, services — as **Shared surfaces** in `PROFILE.md`; leave it
+blank to switch the gate off, which is a decision rather than a default.
+Editing an existing file in them is never gated. Only the birth of a new one.
+
+`deps` exists because a dependency is the most expensive kind of reuse —
+transitive packages, a CVE surface, a licence, an upgrade obligation — and the
+manifests sit outside every source root, so both hooks waved them through.
+Lockfile restores (`npm ci`, `composer install`) and `npm audit fix` stay
+ungated: blocking a cold checkout, or the remediation path for a known CVE,
+costs more than the note it would collect.
+
+### The gate cannot be the thing that guards the gate
+
+`gate-check.sh` allows every write under `.claude/` — it must, or a broken
+install would be unrepairable from inside a session. The cost is that the
+cheapest bypass in the whole pipeline is:
+
+```bash
+echo 'exit 0' >> .claude/hooks/gate-check.sh
+```
+
+Afterwards every hook still "runs", every check still reports green, and nothing
+in the working tree looks wrong. So the guard moves one level out.
+`hook-integrity.sh` records a checksum of every hook and of `settings.json` into
+`.claude/state/hooks.sha256` at configure time, and the `pipeline-guards` CI job
+checks it on every push. A session may still edit a hook — that is legitimate —
+but the edit is now a visible diff to a checksum file rather than four
+characters nobody reads twice. Re-record deliberately:
+
+```bash
+bash .claude/scripts/hook-integrity.sh --update   # commit BOTH together
+```
+
+### Whether the pipeline is followed is now a query
+
+Every gate decision appends a row to `.claude/state/gate-log.tsv`:
+
+```bash
+bash .claude/scripts/gate.sh log
+```
+
+Blocks trending down across features means the workflow is being internalised.
+Blocks flat and high means the gate is in the wrong place. Source edits with
+**zero** blocks and no `gate.sh create` on record means a bypass nobody has
+found yet — and that last line is the one worth watching, because it is the only
+signal that separates "the pipeline is followed" from "the pipeline is inert".
 
 ---
 
@@ -595,8 +750,24 @@ Two rules of thumb regardless of tier:
 
 - The gate hook protects only the source roots named in your profile. Files
   outside them are not gated, by design.
+- `bash-gate` fails **open** on shell forms it cannot parse. It does not cover a
+  write performed by a script invoked by path (`./tool.sh` that writes source
+  internally), or one made inside an interactive editor session. Those remain
+  the Edit/Write door's job. The list of what it *does* cover is in the header
+  of the hook, and every entry on it is a test in `test/hooks.sh`.
+- `hook-integrity.sh` makes disarming the pipeline **visible**, not impossible.
+  Anyone with commit access can re-record the manifest. It is defence in depth
+  against a silent edit, not a permission system.
+- The `permissions.deny` list is defence in depth too, and weaker than it looks:
+  the patterns are prefix-matched, so a reworded command sidesteps them and
+  `bash -c` sidesteps all of them. Treat the hooks as the control surface and
+  the deny list as a guardrail against the one-keystroke version.
 - `doc-check` is a blunt instrument: it asks whether `docs/` changed at all, not
-  whether the *right* doc changed. The monthly report catches the rest.
+  whether the *right* doc changed. The monthly report catches the rest. It
+  nudges while a phase is in flight and only blocks once the gate returns to
+  idle — an unconditional block on `Stop` means the session cannot hand control
+  back at all between the first source edit and the doc being written, which
+  costs a full conversation re-send per forced turn and gets the hook deleted.
 - The report scripts need `python3`. On Pro and Max you can skip them; on Max
   20x `/studio-report` is a headline feature and will not run without it.
 - `tokens.py` falls back to parsing local session transcripts when no OTLP
