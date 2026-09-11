@@ -37,7 +37,10 @@ cd "$W" || exit 1
 lines() { :> "$1"; local i=0; while [ "$i" -lt "$2" ]; do echo "// $i" >> "$1"; i=$((i+1)); done; }
 
 run() { bash .claude/scripts/ratchet.sh "$@" 2>&1; }
-rc()  { bash .claude/scripts/ratchet.sh "$@" >/dev/null 2>&1; echo $?; }
+# No "$@": every call is a bare check. Taking arguments it never receives is
+# what SC2120 flags, and the warning is right -- an unused parameter in a test
+# helper is a call site somebody meant to write and did not.
+rc()  { bash .claude/scripts/ratchet.sh >/dev/null 2>&1; echo $?; }
 
 head_ "1. An unarmed ratchet is not a pass"
 lines src/small.ts 10
