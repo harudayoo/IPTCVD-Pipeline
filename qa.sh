@@ -35,7 +35,7 @@ printf '\033[2m%s\033[0m\n' "$SRC"
 
 # ---------------------------------------------------------------- 1. syntax
 head_ "1. Syntax"
-for f in install.sh configure.sh verify.sh qa.sh templates/common/hooks/*.sh; do
+for f in install.sh configure.sh verify.sh qa.sh test/*.sh templates/common/hooks/*.sh templates/common/scripts/*.sh; do
   bash -n "$f" 2>/dev/null && pass "bash: $(basename "$f")" || fail "bash: $f"
 done
 if command -v python3 >/dev/null 2>&1; then
@@ -246,6 +246,92 @@ while IFS= read -r f; do
   grep -qE '\]\(\.\./|\]\(docs/' "$f" && { fail "$f ships into a project but links to a repo-relative path"; shipbad=1; }
 done < <(find templates -name '*.md' -o -name '*.tmpl')
 [ "$shipbad" = 0 ] && pass "shipped templates contain no repo-relative links"
+
+# ------------------------------------------- 11. guards that cannot be talked out of
+head_ "11. Guard hygiene"
+
+# An exemption matched by SUBSTRING against a string the caller fully controls
+# is not an exemption. `case "$CMD" in *".claude/hooks/"*) exit 0 ;;` is disabled
+# by appending a trailing comment -- one token, and the whole shell gate is off.
+# The safest allowlist is the one you can delete.
+# Comment lines are stripped first: both of these checks describe a pattern
+# that the hooks now carry a comment ABOUT, and a check that fires on its own
+# documentation is a check people learn to ignore.
+uncommented() { sed 's/[[:space:]]*#.*$//' "$1"; }
+
+subbad=0
+for f in templates/common/hooks/*.sh; do
+  uncommented "$f" | grep -qE 'case "\$CMD" in.*\*"\.claude' && {
+    fail "$(basename "$f"): exempts commands by substring match on caller-controlled text"
+    subbad=1
+  }
+done
+[ "$subbad" = 0 ] && pass "no hook exempts commands by substring"
+
+# An allow rule has to name a LOCATION, not a substring. `*test*` ungates every
+# source file whose name merely contains those letters -- LatestReport.ts,
+# InspectorController.ts -- and both walked past a closed gate.
+if uncommented templates/common/hooks/gate-check.sh | grep -qE '\*test\*|\*spec\*|\*Test\*'; then
+  fail "gate-check.sh allows paths by unanchored substring (*test*/*spec*)"
+else
+  pass "gate-check allow rules are anchored to locations, not substrings"
+fi
+
+# A guard that authorises the string it was handed, rather than the file that
+# string resolves to, is not a guard. Six of seven path spellings once walked
+# through, including the absolute one the harness always sends.
+if grep -q 'studio_normalise_path' templates/common/hooks/gate-check.sh 2>/dev/null; then
+  pass "gate-check canonicalises the path before authorising"
+else
+  fail "gate-check canonicalises before authorising (absolute paths bypass a ^-anchored regex)"
+fi
+
+# A pipeline reports its LAST command's status, so `cmd | grep | head` turns a
+# red suite green -- and every VERIFY gate downstream reads that 0 as evidence.
+if grep -q 'PIPESTATUS' templates/common/hooks/filter-output.sh 2>/dev/null; then
+  pass "filter-output preserves the original exit status"
+else
+  fail "filter-output preserves exit status (without it a failing suite reports success)"
+fi
+
+# Both doors, or neither. gate-check.sh only ever sees Edit and Write.
+if [ -f templates/common/hooks/bash-gate.sh ]; then
+  pass "a Bash write-gate exists"
+else
+  fail "a Bash write-gate exists (else the gate is one sed -i from irrelevant)"
+fi
+for t in templates/tiers/*/settings.json.tmpl; do
+  grep -q 'bash-gate.sh' "$t" \
+    && pass "$(basename "$(dirname "$t")"): bash-gate registered" \
+    || fail "$(basename "$(dirname "$t")"): bash-gate is NOT registered on Bash"
+done
+
+# ------------------------------------------------ 12. nothing binary ships
+head_ "12. Nothing compiled or generated is tracked"
+# install.sh copies templates/skills/<name>/ wholesale, so a committed
+# __pycache__ lands in every user's repository: bytecode nobody reviewed,
+# shipped by a tool whose entire pitch is that gates close on evidence.
+binbad=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  fail "tracked build artifact: $f"
+  binbad=1
+done < <(git ls-files 2>/dev/null | grep -E '(__pycache__/|\.pyc$|\.pyo$|\.DS_Store$)' || true)
+[ "$binbad" = 0 ] && pass "no compiled or OS artifacts tracked under templates/"
+
+# ---------------------------------------------------- 13. hook behaviour
+head_ "13. Hook behaviour (test/hooks.sh)"
+# qa.sh checks the templates' SHAPE. This is the only thing that checks what
+# they DO -- against the bypasses, not the happy path.
+if [ -f test/hooks.sh ]; then
+  if bash test/hooks.sh >/dev/null 2>&1; then
+    pass "every bypass shape reaches the same verdict as the plain one"
+  else
+    fail "test/hooks.sh fails -- run it directly to see which shape walks through"
+  fi
+else
+  fail "test/hooks.sh exists"
+fi
 
 printf '\n\033[1m%d passed, %d failed, %d warnings\033[0m\n' "$PASS" "$FAIL" "$WARN"
 [ "$FAIL" -gt 0 ] && exit 1

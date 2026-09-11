@@ -3,3 +3,9 @@
 
 # This repo is itself worked on with Claude Code.
 .claude/settings.local.json
+
+# Python bytecode. install.sh copies templates/skills/<name>/ wholesale, so a
+# committed __pycache__ ships compiled code into every user repository.
+__pycache__/
+*.pyc
+*.pyo

@@ -6,7 +6,10 @@
     "deny": [
       "Read(./.env)", "Read(./.env.*)", "Read(./**/*.pem)", "Read(./**/*.key)",
       "Write(./.env)", "Write(./.env.*)",
-      "Bash(rm -rf /*)", "Bash(git push --force*)", "Bash(*DROP TABLE*)"
+      "Bash(rm -rf /*)", "Bash(git push --force*)", "Bash(*DROP TABLE*)",
+      "Write(./.claude/hooks/**)", "Edit(./.claude/hooks/**)",
+      "Write(./.claude/settings.json)", "Edit(./.claude/settings.json)",
+      "Bash(git push -f*)", "Bash(git push --force-with-lease*)", "Bash(chmod -x .claude/hooks/*)"
     ],
     "allow": [
       "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git branch*)"
@@ -16,8 +19,12 @@
     "PreToolUse": [
       { "matcher": "Edit|Write",
         "hooks": [{ "type": "command", "command": ".claude/hooks/gate-check.sh" }] },
-      { "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": ".claude/hooks/filter-output.sh" }] }
+      { "_comment": "bash-gate runs BEFORE filter-output: a command that must be refused should never be rewritten first. Without this entry the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write.",
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/bash-gate.sh" },
+          { "type": "command", "command": ".claude/hooks/filter-output.sh" }
+        ] }
     ],
     "PostToolUse": [
       { "matcher": "Edit|Write",
