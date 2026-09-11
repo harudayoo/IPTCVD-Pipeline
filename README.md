@@ -231,12 +231,14 @@ Then, inside Claude Code:
 /context     # pre-prompt total should sit under ~15% of the window
 ```
 
-### Four test layers
+### Six test layers
 
 | Script | Checks | Run it |
 |---|---|---|
-| `./verify.sh --target .` | one **install** — hooks fire on the spellings that ship, inventory matches the tier, budget, hook audit | after every install, configure, or hook edit |
-| `./test/hooks.sh` | what the hooks **do** — every bypass shape, both doors, exit-status preservation | after touching any hook |
+| `./verify.sh --target .` | one **install** — hooks fire on the spellings that ship, inventory matches the tier, budget, hook audit, ratchet, hook integrity | after every install, configure, or hook edit |
+| `./test/hooks.sh` | what the hooks **do** — every bypass shape, both doors, exit-status preservation, and the documented phase sequence end to end | after touching any hook |
+| `./test/profile-validation.sh` | what `configure.sh` must **refuse** — values that would corrupt or subvert a hook | after touching the profile or configure |
+| `./test/ratchet.sh` | that the ratchet **ratchets** — shrink allowed, growth refused, new crossings refused | after touching the ratchet |
 | `./qa.sh` | the **templates** — frontmatter, manifest integrity, placeholder coverage, guard hygiene, docs drift | before changing this repo, and in CI |
 | `./test/integration.sh` | the **lifecycle** — six stacks, upgrade, tier switch, uninstall, degraded environments | before a release |
 
@@ -269,11 +271,11 @@ placeholder nothing substitutes leaves a hook inert forever.
 ├── skills/          the tier's playbooks
 ├── rules/           path-scoped standards, loaded only when a match is read
 ├── hooks/           gate-check, bash-gate, filter-output, post-edit, doc-check
-├── scripts/         gate.sh (records the plan), hook-integrity.sh
+├── scripts/         gate.sh, hook-integrity.sh, ratchet.sh, coverage-gate.sh
 ├── agent-memory/    committed — this is the institutional memory
 ├── workflows/       Max 20x only
-└── state/           gate.json, studio.json, doc-map.json,
-                     hooks.sha256, gate-log.tsv
+└── state/           gate.json, studio.json, doc-map.json, hooks.sha256,
+                     gate-log.tsv, size-baseline.tsv, coverage-floor.txt
 docs/
 ├── setup/           PROFILE.md
 ├── adr/             TEMPLATE.md
@@ -474,6 +476,48 @@ characters nobody reads twice. Re-record deliberately:
 ```bash
 bash .claude/scripts/hook-integrity.sh --update   # commit BOTH together
 ```
+
+### A standard nothing measures is a preference
+
+`.claude/rules/*.md` state a file-size bar and a coverage minimum. Written down
+is not enforced. On the codebase this pipeline was extracted from, the 800-line
+bar had been in the standards for months and was measured by nothing: 13 files
+sat over it, topping out at 2,100 lines — and 28 of that repo's 30
+`react-hooks` violations lived inside a single 1,476-line file. That is not a
+coincidence. Nobody refactors a file they cannot hold in their head, so defects
+accumulate where the lines do. The 80% coverage minimum was worse: every CI job
+set `coverage: none`, so the number had **never once been produced**.
+
+Two scripts turn both into numbers, and both are ratchets rather than cleanups —
+which is what makes them adoptable on a tree that is already over the bar:
+
+```bash
+bash .claude/scripts/ratchet.sh              # file size; CI runs this
+bash .claude/scripts/ratchet.sh --update     # re-record, deliberately
+bash .claude/scripts/ratchet.sh --list       # what is over the bar, largest first
+
+<test command> --coverage | tee coverage.txt
+bash .claude/scripts/coverage-gate.sh coverage.txt
+```
+
+| | |
+|---|---|
+| a baselined file | may **shrink**, never grow |
+| an unlisted file | may not cross the bar at all |
+| the bar itself | lives in the baseline file, so changing it is a committed diff somebody can object to — not an edit to a tool |
+| coverage | fails **below** the floor, and also fails far **above** it, asking for the floor to be raised. A floor that drifts far below reality certifies nothing while still looking like a gate |
+
+`configure.sh` records the size baseline against the tree as it is on the day
+you install, so the bar applies to what happens next rather than to a backlog
+nobody agreed to fix this week. The coverage floor starts **unset** and reports
+the real number rather than failing a build over a figure nobody has seen; arm
+it by committing that number. An unarmed floor still annotates the CI run,
+because nobody reads stdout in a green job.
+
+Regenerating either baseline is allowed. The point was never that it is
+impossible — it is that it is **visible**. Without a ceiling, the cheapest way
+past a hard limit on a legacy tree is to delete the limit, and that happens
+quietly.
 
 ### Whether the pipeline is followed is now a query
 

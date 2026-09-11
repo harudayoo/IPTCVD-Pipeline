@@ -71,6 +71,29 @@ jobs:
           done
           PATH="/tmp/brokenbin:$PATH" bash test/hooks.sh
 
+  profile-validation:
+    name: Profile values · what configure.sh must refuse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Values that would corrupt or subvert a hook
+        # Profile values are substituted into hook SOURCE. post-edit.sh runs the
+        # format command unquoted on every edit, and filter-output.sh puts
+        # commands inside `case` patterns where a stray `)` leaves the hook a
+        # syntax error that dies on every Bash call.
+        run: bash test/profile-validation.sh
+
+  ratchet:
+    name: Ratchet · does it actually ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shrink allowed, growth refused, new crossings refused
+        run: bash test/ratchet.sh
+
   templates:
     name: Templates · qa.sh
     runs-on: ubuntu-latest

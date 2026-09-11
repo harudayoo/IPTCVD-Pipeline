@@ -157,6 +157,20 @@ else
   fail "hook-integrity.sh is installed - nothing else makes a disarmed hook visible"
 fi
 
+head_ "3d. Standards that are measured, not just written"
+if [ -x .claude/scripts/ratchet.sh ]; then
+  if bash .claude/scripts/ratchet.sh >/dev/null 2>&1; then
+    pass "size ratchet: no file grew past its baseline"
+  else
+    fail "size ratchet (run: bash .claude/scripts/ratchet.sh)"
+  fi
+else
+  fail "ratchet.sh is installed - without it the file-size rule is a preference"
+fi
+[ -f .claude/scripts/coverage-gate.sh ] \
+  && pass "coverage-gate.sh is installed" \
+  || fail "coverage-gate.sh is installed"
+
 head_ "4. Doc check"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   bash .claude/hooks/doc-check.sh >/dev/null 2>&1

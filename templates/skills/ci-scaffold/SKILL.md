@@ -23,7 +23,24 @@ push. This skill closes that gap. Read `.claude/rules/devops.md` first, then
    configured for this ecosystem, say so and suggest the standard one for the
    detected package manager (`npm audit`, `composer audit`, `pip-audit`,
    `cargo audit`, `govulncheck`) rather than skipping silently.
-4. **Test** — the profile's non-watching test command. If tests need a
+4. **Test** — the profile's non-watching test command. Enable the coverage
+   driver for this job and pipe the run through `tee` so the output survives,
+   then add a coverage-floor step:
+
+   ```yaml
+      - name: Run tests with coverage
+        run: |
+          set -o pipefail          # or the tee status hides a failing suite
+          <test command> --coverage | tee coverage.txt
+      - name: Coverage floor
+        if: always()
+        run: bash .claude/scripts/coverage-gate.sh coverage.txt
+   ```
+
+   The floor starts unset and REPORTS the real number rather than failing a
+   build over a figure nobody has seen; arm it by committing that number. Do
+   not skip this because coverage is currently low — an unmeasured minimum is
+   the failure mode, not a low one. If tests need a
    database, cache, or queue, add it as an ephemeral `services:` container
    scoped to the job, matching whatever the project's local dev stack
    actually uses — check `docker-compose.yml` or `.env.example` for the real
@@ -60,6 +77,12 @@ Claude Code session cannot turn off from inside a session:
         run: ./verify.sh --target .
       - name: The enforcement layer is the one that was reviewed
         run: bash .claude/scripts/hook-integrity.sh
+      - name: Standards that are measured, not just written
+        # `.claude/rules/*.md` state a file-size bar. Until something measures
+        # it, it is a preference -- on the codebase this pipeline came from,
+        # that bar had been written down for months while 13 files sat over it,
+        # topping out at 2,100 lines.
+        run: bash .claude/scripts/ratchet.sh
       - name: The gate is committed closed
         # Committing gate.json at "create" leaves the NEXT change unprotected,
         # and nothing about the working tree would look wrong.
