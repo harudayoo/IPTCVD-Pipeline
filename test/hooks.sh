@@ -281,6 +281,78 @@ else
   fail "gate.sh is installed" "templates/common/scripts/gate.sh" "missing"
 fi
 
+# ------------------------------------------- 13. the documented workflow works
+head_ "13. The documented phase sequence actually opens and closes the gate"
+# This is the test that was missing, and the gap it covers was real: the phase
+# skills said "update gate.json: set phase to create", which written literally
+# produces {"phase":"create"} and ERASES the problem/red notes. Every hook test
+# passed, because they all drove gate.sh directly -- and the pipeline would have
+# deadlocked at the CREATE phase, the exact phase it exists to unblock.
+#
+# A guard suite that only exercises the guard is not enough. The workflow that
+# OPERATES the guard has to be walked too.
+SRCF="src/services/dues.ts"
+step() {  # step <label> <gate.sh args...> ; then assert source reachability
+  local label="$1"; shift
+  local want="$1"; shift
+  bash .claude/scripts/gate.sh "$@" >/dev/null 2>&1
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then fail "$label (gate.sh refused)" "exit 0" "exit $rc"; return; fi
+  printf '{"tool_input":{"file_path":"%s"}}' "$SRCF" | bash .claude/hooks/gate-check.sh >/dev/null 2>&1
+  local got=$?
+  [ "$got" = "$want" ] && pass "$label" || fail "$label" "source exit $want" "exit $got"
+}
+
+step "idle: source blocked"              2 idle
+step "plan: source blocked"              2 plan
+step "test: source blocked"              2 test
+step "create: source OPEN"               0 create \
+     --problem "National finance summed every chapter's dues into the total" \
+     --red     "DuesTest::national_excludes_chapter fails: expected 0, got 41250"
+step "advance verify: source still OPEN" 0 advance verify
+step "advance document: source blocked"  2 advance document
+step "idle: re-armed for the next slice" 2 idle
+
+# The regression that motivated `advance`: a phase change must not erase the
+# slice's answers. Writing gate.json by hand is what did.
+bash .claude/scripts/gate.sh create \
+  --problem "National finance summed every chapter's dues into the total" \
+  --red "DuesTest::national_excludes_chapter fails: expected 0, got 41250" >/dev/null 2>&1
+bash .claude/scripts/gate.sh advance verify >/dev/null 2>&1
+if grep -q '"problem"' .claude/state/gate.json && grep -q '"red"' .claude/state/gate.json; then
+  pass "advance carries problem and red forward"
+else
+  fail "advance carries problem and red forward" "both notes kept" "notes erased"
+fi
+
+# And it must not be a way AROUND stating them.
+printf '{"phase":"plan"}\n' > "$GATE"
+bash .claude/scripts/gate.sh advance create >/dev/null 2>&1 \
+  && fail "advance into create still demands the notes" "exit 1" "exit 0" \
+  || pass "advance into create still demands the notes"
+
+head_ "14. The skills only name gate.sh commands that exist"
+# Documentation drift in the other direction: a skill telling the agent to run
+# a subcommand that was renamed is a pipeline that stops at that phase.
+DRIFT=0
+for c in $(grep -rhoE 'gate\.sh (advance )?[a-z]+' "$SRC"/templates/skills "$SRC"/templates/agents "$SRC"/templates/tiers 2>/dev/null \
+           | sed 's/^gate\.sh //; s/^advance //' | sort -u); do
+  case "$c" in
+    idle|plan|test|create|verify|document|show|log|advance) ;;
+    *) fail "a skill names a gate.sh command that does not exist" "a known subcommand" "'$c'"; DRIFT=1 ;;
+  esac
+done
+[ "$DRIFT" = 0 ] && pass "every gate.sh command named in the skills exists"
+
+# The phase skills must be ALLOWED to run it, or the instruction is decoration.
+MISSING_TOOL=""
+for f in "$SRC"/templates/skills/phase-*/SKILL.md "$SRC"/templates/skills/feature/SKILL.md; do
+  [ -f "$f" ] || continue
+  grep -q 'allowed-tools:.*gate\.sh' "$f" || MISSING_TOOL="$MISSING_TOOL $(basename "$(dirname "$f")")"
+done
+[ -z "$MISSING_TOOL" ] && pass "every phase skill may run gate.sh" \
+  || fail "every phase skill may run gate.sh" "allowed-tools carries gate.sh" "missing in:$MISSING_TOOL"
+
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && { printf 'A guard that fails its own bypass suite is not a guard.\n'; exit 1; }
 printf 'Every bypass shape reaches the same verdict as the plain one.\n'

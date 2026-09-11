@@ -420,6 +420,26 @@ with no reason, is rejected. The hook cannot judge whether a change is testable,
 so it does not try — it requires the answer to be **stated**, and the reviewing
 agent checks the stated answer against the diff.
 
+Opening the gate belongs to the **TEST** phase, because that is the phase that
+produces the evidence `--red` wants. Every later transition inside the slice
+uses `advance`, which carries the notes forward:
+
+```bash
+bash .claude/scripts/gate.sh plan                 # source stays blocked
+bash .claude/scripts/gate.sh test
+bash .claude/scripts/gate.sh create --problem "…" --red "…"   # source opens
+bash .claude/scripts/gate.sh advance verify       # stays open for review fixes
+bash .claude/scripts/gate.sh advance document     # closes
+bash .claude/scripts/gate.sh idle                 # re-arms for the next change
+```
+
+`advance` exists because a phase change is not a new plan. Writing
+`{"phase":"verify"}` by hand — which is what "update gate.json: set phase to
+verify" means when read literally — **erases** `problem` and `red`, so the gate
+slams shut on a slice that had answered everything correctly, one phase after
+the mistake was made. Every phase skill now calls `gate.sh`, and `test/hooks.sh`
+walks the whole documented sequence to prove it still opens and closes.
+
 `reuse` exists because "reuse what is already here" stays advisory until
 something asks. Declare the directories where near-duplicates breed —
 components, pages, services — as **Shared surfaces** in `PROFILE.md`; leave it

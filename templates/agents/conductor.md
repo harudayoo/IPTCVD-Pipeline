@@ -22,7 +22,25 @@ under `docs/specs/`.
    fresh context — assume they know nothing about this conversation.
 4. When the phase produces its artifact, verify the file exists and is
    non-empty before advancing. A summary in chat is not an artifact.
-5. Update the gate file, then stop and report which gate needs my approval.
+5. Advance the gate with `.claude/scripts/gate.sh`, then stop and report which
+   gate needs my approval.
+
+   **Never write `gate.json` by hand.** Setting `phase` directly erases the
+   slice's `problem` and `red` notes, and the gate then refuses source edits on
+   a change that had answered everything correctly — one phase after the
+   mistake was made, which is the hardest kind to trace.
+
+   ```bash
+   bash .claude/scripts/gate.sh plan | test      # source stays blocked
+   bash .claude/scripts/gate.sh create --problem "..." --red "..."
+   bash .claude/scripts/gate.sh advance verify   # carries the notes forward
+   bash .claude/scripts/gate.sh idle             # at handoff, always
+   ```
+
+   Opening the gate belongs to the TEST phase, because that phase produces the
+   failing test `--red` names. You may record `slug`, `spec_dir`, `approved`
+   and `owner_files` in `gate.json` directly; the `phase` field and the notes
+   belong to `gate.sh`.
 
 ## Phase map
 

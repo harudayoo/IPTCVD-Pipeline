@@ -1,7 +1,7 @@
 ---
 description: Runs the DOCUMENT phase — updates docs, ADRs and changelog to match what was built, writes the handoff note, and prunes agent memory. Use as the final phase of a change.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(cat .claude/state/gate.json)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
 ---
 
 Gate: !`cat .claude/state/gate.json 2>/dev/null || echo '{"phase":"idle"}'`
@@ -43,7 +43,19 @@ written exemption.
 The `Stop` hook enforces this at the end of every session, which is what makes
 documentation a gate rather than the phase that gets skipped when you are tired.
 
-Then reset `.claude/state/gate.json` to `idle` and clear `slug`, `spec_dir` and
+Then reset the gate. This is the step that re-arms it for the next change,
+and skipping it is invisible: a gate left open stops guarding anything, and the
+next slice — possibly next session — silently skips the plan requirement
+entirely.
+
+```bash
+bash .claude/scripts/gate.sh idle
+```
+
+The Stop hook nudges if you leave it open with no source in flight, and CI
+fails if it is ever COMMITTED open.
+
+Then clear `slug`, `spec_dir` and
 `owner_files`. The cycle is closed.
 
 Run `/handoff` before ending the session.

@@ -1,7 +1,7 @@
 ---
 description: Runs the VERIFY phase — five read-only auditors dispatched in parallel, each returning severity-ranked findings with evidence. Use after the CREATE gate is approved.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(cat .claude/state/gate.json)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
 ---
 
 Gate: !`cat .claude/state/gate.json 2>/dev/null || echo '{"phase":"idle"}'`
@@ -54,5 +54,11 @@ Findings that become work re-enter at **TEST**, not at CREATE. A bug fix gets a
 failing test first — that is the same rule the whole pipeline is built on, and
 the verify gate is exactly where people are most tempted to skip it.
 
-Then update `.claude/state/gate.json`: set `phase` to `document` and append
+Then close the gate to source:
+
+```bash
+bash .claude/scripts/gate.sh advance document
+```
+
+Then update `.claude/state/gate.json`: append
 `verify` to `approved`.

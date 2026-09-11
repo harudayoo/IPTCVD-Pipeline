@@ -1,7 +1,7 @@
 ---
 description: Runs the TEST phase — turns approved acceptance criteria into a test matrix and actual failing tests committed to the repo. Use after the PLAN gate is approved, before any implementation.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(cat .claude/state/gate.json)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
 ---
 
 Gate: !`cat .claude/state/gate.json 2>/dev/null || echo '{"phase":"idle"}'`
@@ -43,8 +43,29 @@ This phase closes when:
    reason will pass for the wrong reason too.
 4. **You approve it.**
 
-Then update `.claude/state/gate.json`: set `phase` to `create` and append `test`
-to `approved`.
+Then open the gate. This is the transition that unblocks source, and it is
+the only one that demands the slice's answers, because this is the phase that
+produced them:
+
+```bash
+bash .claude/scripts/gate.sh create \
+  --problem "<what breaks, and what is out of scope>" \
+  --red     "<the test that fails NOW, with its actual failure line>" \
+  [--reuse  "<reuse X / extend X / new because X cannot Y>"] \
+  [--deps   "<what you checked first, and why it does not cover this>"]
+```
+
+`--red` takes the real failure — the assertion and the observed value, not
+"tests written". If this change genuinely has no behaviour to pin (a design
+token, a comment, a config rename), say so explicitly: `--red "n/a: <why>"`.
+The gate refuses a bare `n/a`, because the entire value of this phase is that a
+change with no failing test has to say why.
+
+`--reuse` is required only when the plan CREATES a file under a declared shared
+surface; `--deps` only when it edits a dependency manifest. The hook will tell
+you which one it wants, and name the file that triggered it.
+
+Then append `test` to `approved` in `.claude/state/gate.json`.
 
 The gate hook opens source files for writing at this point. That is the whole
 purpose of this phase.

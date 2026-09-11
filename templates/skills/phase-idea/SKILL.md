@@ -2,7 +2,7 @@
 description: Runs the IDEA phase — frames a raw request into a problem statement, scope boundaries, success metrics and EARS acceptance criteria. Use as the first phase of any feature, bug or change request.
 disable-model-invocation: true
 argument-hint: [description of the change]
-allowed-tools: Bash(git status *) Bash(git log *) Bash(cat .claude/state/gate.json)
+allowed-tools: Bash(git status *) Bash(git log *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
 ---
 
 Request: $ARGUMENTS
@@ -46,7 +46,18 @@ This phase closes when:
 4. **You approve it.** Read it. An idea gate you rubber-stamp is a gate that
    does not exist.
 
-Then update `.claude/state/gate.json`: set `phase` to `plan`, `slug`,
+Then record the slice and move to the planning phase:
+
+```bash
+bash .claude/scripts/gate.sh plan
+```
+
+`plan` keeps source edits blocked — that is the point of the phase. Carry the
+problem statement you just wrote into the plan phase; it becomes `--problem`
+when the gate is opened, and it is the one sentence the whole slice is judged
+against.
+
+Then update `.claude/state/gate.json`: set `slug`,
 `spec_dir`, and append `idea` to `approved`.
 
 Stop after this phase. Report what needs my approval.
