@@ -1,7 +1,7 @@
 ---
 description: Runs the CREATE phase — implements the approved plan against the red tests until they pass, one owning agent per file set. Use only after the TEST gate is approved.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(cat .claude/state/gate.json)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
 ---
 
 Gate: !`cat .claude/state/gate.json 2>/dev/null || echo '{"phase":"idle"}'`
@@ -43,7 +43,16 @@ This phase closes when:
    grew silently — send it back or re-open the plan deliberately.
 4. **You approve it.**
 
-Then update `.claude/state/gate.json`: set `phase` to `verify` and append
-`create` to `approved`.
+Then advance. `advance` carries the slice's notes forward rather than
+restating them — a phase change is not a new plan:
+
+```bash
+bash .claude/scripts/gate.sh advance verify
+```
+
+Source stays writable through verify, so review findings can be fixed without
+re-opening the gate.
+
+Then append `create` to `approved` in `.claude/state/gate.json`.
 
 Tell me to run `/clear` before starting the verify phase.

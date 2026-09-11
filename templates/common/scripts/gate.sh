@@ -17,11 +17,18 @@
 #     [--reuse  "extend DuesScope; it already models the two tiers"] \
 #     [--deps   "no date helper here; hand-rolled the same parser in 3 places"]
 #
-#   bash .claude/scripts/gate.sh verify    # source edits stay open for fixes
-#   bash .claude/scripts/gate.sh idle      # document phase -- reset, so the
-#                                          # default is blocked again
+#   bash .claude/scripts/gate.sh advance verify   # next phase, SAME notes
+#   bash .claude/scripts/gate.sh advance document
+#   bash .claude/scripts/gate.sh idle      # handoff -- reset, so the default
+#                                          # is blocked again
 #   bash .claude/scripts/gate.sh show      # what is on record right now
 #   bash .claude/scripts/gate.sh log       # the decision history
+#
+# Use `advance` for every transition INSIDE a slice. A phase change is not a new
+# plan. Writing the phase by hand -- which is what "update gate.json: set phase
+# to create" means when read literally -- erases the notes and slams the gate
+# shut on a change that had answered everything correctly, one phase after the
+# mistake was made.
 #
 # --reuse is required to CREATE a file under a shared-surface directory.
 # --deps is required to edit a dependency manifest.
@@ -32,6 +39,12 @@
 # rather than guessing; the reviewing agent checks the answer against the diff.
 set -uo pipefail
 
+# Resolve this script's own path BEFORE changing directory. usage() reads the
+# header back out of $0, and after the cd a relative $0 no longer resolves --
+# so `--help` printed a sed error and exited 0, which is a help text that
+# reports success while telling you nothing.
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
 cd "$(dirname "$0")/../.." || exit 1
 GATE=".claude/state/gate.json"
 
@@ -39,7 +52,13 @@ GATE=".claude/state/gate.json"
 # the file. These values arrive from a human sentence, not a machine.
 esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'; }
 
-usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; }
+# The header IS the help text, so it cannot drift from the implementation.
+# The range ends at `set -u`, found rather than hardcoded: a hardcoded line
+# number silently truncates the help the first time the header grows.
+usage() {
+  sed -n "2,$(( $(grep -n '^set -u' "$SELF" | head -1 | cut -d: -f1) - 1 ))p" "$SELF" \
+    | sed 's/^# \{0,1\}//'
+}
 
 # Dense length: whitespace stripped, so "   ok   " does not read as eight
 # characters of content.
@@ -57,6 +76,63 @@ case "$CMD" in
 
   show)
     if [ -f "$GATE" ]; then cat "$GATE"; else echo "no $GATE (treated as idle)"; fi
+    ;;
+
+  advance)
+    # Move to the next phase WITHOUT restating the notes.
+    #
+    # The phase skills hand off between themselves several times per slice
+    # (test -> create -> verify), and every one of those transitions used to be
+    # "write phase=X into gate.json". Against a gate that also wants `problem`
+    # and `red`, that silently erases them -- so the CREATE phase would open the
+    # gate and the very next transition would slam it shut on a slice that had
+    # answered everything correctly. A phase change is not a new plan; it should
+    # carry the plan it already has.
+    NEXT="${1:-}"
+    case "$NEXT" in
+      idle|plan|test|create|verify|document) ;;
+      *) echo "usage: gate.sh advance <plan|test|create|verify|document|idle>" >&2; exit 1 ;;
+    esac
+    if [ ! -f "$GATE" ]; then
+      echo "refusing: no $GATE to advance. Open the slice with: gate.sh create --problem ... --red ..." >&2
+      exit 1
+    fi
+
+    read_key() {  # read_key <name> -- prints the value, or nothing
+      if command -v jq >/dev/null 2>&1; then
+        v=$(jq -r --arg k "$1" '.[$k] // ""' "$GATE" 2>/dev/null) && [ -n "$v" ] && { printf '%s' "$v"; return; }
+      fi
+      grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"\(\\\\.\|[^\"\\\\]\)*\"" "$GATE" 2>/dev/null \
+        | head -1 | sed "s/^\"$1\"[[:space:]]*:[[:space:]]*\"//; s/\"$//; s/\\\\\"/\"/g"
+    }
+    PROBLEM=$(read_key problem); RED=$(read_key red)
+    VAULT=$(read_key vault); REUSE=$(read_key reuse); DEPS=$(read_key deps)
+
+    # Advancing INTO a source-writing phase still requires the answers. If the
+    # slice never had them, this is the moment to say so rather than to open a
+    # gate on nothing.
+    case "$NEXT" in
+      create|verify)
+        if [ -z "$PROBLEM" ] || [ -z "$RED" ]; then
+          echo "refusing to advance to '$NEXT': the slice on record carries no problem/red note." >&2
+          echo "  Open it properly instead:" >&2
+          echo "    bash .claude/scripts/gate.sh $NEXT --problem \"<what breaks>\" --red \"<the failing test, or n/a: why>\"" >&2
+          exit 1
+        fi
+        ;;
+    esac
+
+    {
+      printf '{"phase":"%s"' "$NEXT"
+      [ -n "$PROBLEM" ] && printf ',"problem":"%s"' "$(esc "$PROBLEM")"
+      [ -n "$RED" ] && printf ',"red":"%s"' "$(esc "$RED")"
+      [ -n "$VAULT" ] && printf ',"vault":"%s"' "$(esc "$VAULT")"
+      [ -n "$REUSE" ] && printf ',"reuse":"%s"' "$(esc "$REUSE")"
+      [ -n "$DEPS" ] && printf ',"deps":"%s"' "$(esc "$DEPS")"
+      printf ',"updated_at":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '}\n'
+    } > "$GATE"
+    echo "gate: $NEXT (notes carried forward)"
     ;;
 
   log)

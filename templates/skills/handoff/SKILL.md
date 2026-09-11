@@ -1,7 +1,7 @@
 ---
 description: Writes an end-of-session handoff note capturing state, decisions, rejected approaches and next actions. Use before ending a session with uncommitted work.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(bash .claude/scripts/gate.sh *)
 ---
 
 - Branch: !`git branch --show-current 2>/dev/null`
