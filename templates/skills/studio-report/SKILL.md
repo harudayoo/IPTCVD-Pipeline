@@ -1,7 +1,7 @@
 ---
 description: Generates the monthly codebase structure, documentation inventory and token consumption reports. Use at month end or when asked for a project health report.
 disable-model-invocation: true
-allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/*) Bash(git *) Read Write
+allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/*) Bash(git *) Bash(bash .claude/scripts/gate.sh log*) Bash(bash .claude/scripts/ratchet.sh --list) Read Write
 argument-hint: [YYYY-MM]
 ---
 
@@ -14,6 +14,8 @@ interpretation, not counting.
 1. `python3 ${CLAUDE_SKILL_DIR}/scripts/structure.py . docs/reports/$ARGUMENTS/`
 2. `python3 ${CLAUDE_SKILL_DIR}/scripts/docs_audit.py . docs/reports/$ARGUMENTS/`
 3. `python3 ${CLAUDE_SKILL_DIR}/scripts/tokens.py $ARGUMENTS docs/reports/$ARGUMENTS/`
+4. `bash .claude/scripts/gate.sh log 500` — the gate decision history.
+5. `bash .claude/scripts/ratchet.sh --list` — every file over the size bar.
 
 Then read the three JSON outputs and write
 `docs/reports/$ARGUMENTS/SUMMARY.md`:
@@ -25,6 +27,34 @@ Then read the three JSON outputs and write
 - **Documentation** — coverage percentage, the stale list ranked by risk, ADRs
   added, and every spec directory closed without a `verification.md`. That last
   list is the fastest signal of process drift.
+- **Compliance** — read from `.claude/state/gate-log.tsv`, and cross-reference
+  the ratchet list from step 5. This is the section that says whether the
+  pipeline is being *followed* rather than merely installed. Without it the
+  only available answer is an impression, and an impression of compliance is
+  the thing this whole pipeline exists to replace.
+
+  Report three things, and interpret each:
+
+  | Signal | What it means |
+  |---|---|
+  | blocks per completed feature, trending | falling = the workflow is being internalised; flat and high = the gate is in the wrong place, not that people are careless |
+  | the most common block `reason` | `missing-reuse` concentrated in one directory means that surface needs a shared component, not more discipline |
+  | source edits with **zero** blocks and no `create` in the log | **the one that matters.** It means work reached source without passing the gate — a bypass nobody has found yet, or a hook that stopped firing |
+
+  That last line is the only signal separating "the pipeline is followed" from
+  "the pipeline is inert", so lead with it when it is non-zero. A month with no
+  blocks at all is not a good month; it is an unverified claim.
+
+  A file that is both over the size bar and in the top churn decile is the
+  highest-value refactor on the board, and it is where token spend concentrates
+  too: nobody can hold it in their head, so it gets re-read in full every
+  session. That intersection belongs in **Recommendations** with both numbers
+  attached.
+
+  If `gate-log.tsv` is missing or empty, say so plainly and treat compliance as
+  **unmeasured** for the period. Do not infer it from commit messages — that is
+  exactly the substitution of an impression for a measurement this section
+  exists to stop.
 - **Tokens** — total by model and by agent, cost, and TPAC (tokens per accepted
   change) against `docs/reports/baseline.md`. Name the three largest consumers
   and the estimated saving from each active optimisation, with the evidence for

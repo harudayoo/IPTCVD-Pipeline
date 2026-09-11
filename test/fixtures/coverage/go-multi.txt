@@ -1,0 +1,2 @@
+ok  	example.com/cov	(cached)	coverage: 20.0% of statements
+ok  	example.com/cov/beta	0.152s	coverage: 50.0% of statements

@@ -5,6 +5,23 @@ paths:
 
 # Front-end standards
 
+**Size.** 800 lines is the bar for a source file, and it is measured, not
+suggested: `bash .claude/scripts/ratchet.sh` runs in CI. It is a ratchet, so a
+tree already over the bar is recordable — a baselined file may shrink and may
+never grow, and an unlisted file may not cross at all. `--list` shows every
+file currently over it, largest first.
+
+Lines are what the ratchet counts, and only lines. Function length, nesting
+depth and parameter counts need a real parser per language to measure honestly,
+so they stay below as stated standards that review checks by reading. Treating
+the ratchet's silence as approval of a 300-line function is reading it
+backwards.
+
+Size is a proxy, and the reason it is worth measuring is that nobody refactors a
+file they cannot hold in their head, so defects pool where the lines do: on the
+codebase this pipeline came from, 28 of 30 react-hooks violations lived in one
+1,476-line file.
+
 **Tokens.** Colour, spacing, radius, shadow and type scale come from
 `{{TOKEN_FILE}}`. A literal hex, px or rem in a component is a review blocker.
 

@@ -1,0 +1,6 @@
+Finished in 2.31 seconds (files took 0.9 seconds to load)
+42 examples, 0 failures
+
+Coverage report generated for RSpec to /home/u/app/coverage
+Line coverage: 123 / 456 (26.97%)
+Branch coverage: 45 / 60 (75.00%)

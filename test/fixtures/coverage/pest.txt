@@ -1,0 +1,11 @@
+  PASS  Tests\Unit\ExampleTest
+  ✓ it adds
+
+  Tests:    1 passed (1 assertions)
+  Duration: 0.31s
+
+  app/Http/Controllers/DuesController .................. 22..31, 40  18.4%
+  app/Services/DuesService ............................. 55..61, 77  42.0%
+  app/Services/UserService ........................................  91.6%
+
+  Total: 42.7 %

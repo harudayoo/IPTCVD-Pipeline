@@ -39,8 +39,9 @@ Three claims, and the whole repo is built around them:
    first three claims are only worth what the enforcement layer is worth, and a
    hook that never fires produces exactly the same green output as a hook that
    works. So every guard in here ships with the bypasses that defeated it, in
-   `test/hooks.sh`, and every assertion in that suite is checked to be capable
-   of going red.
+   `test/hooks.sh` — and `qa.sh --mutate` puts each of those defects *back*, one
+   at a time, and requires a suite to go red. A suite nobody has watched fail is
+   not evidence; it is a habit.
 
 ### What claim 4 cost, in this repo
 
@@ -239,22 +240,66 @@ Then, inside Claude Code:
 | `./test/hooks.sh` | what the hooks **do** — every bypass shape, both doors, exit-status preservation, and the documented phase sequence end to end | after touching any hook |
 | `./test/profile-validation.sh` | what `configure.sh` must **refuse** — values that would corrupt or subvert a hook | after touching the profile or configure |
 | `./test/ratchet.sh` | that the ratchet **ratchets** — shrink allowed, growth refused, new crossings refused | after touching the ratchet |
+| `./test/coverage.sh` | that the coverage gate reads the **total** — five runners' real output, each with a per-unit decoy above it | after touching the coverage gate |
+| `./test/mutation.sh` | that the suites above can **fail** — every shipped defect put back, one at a time | after adding or changing an assertion |
 | `./qa.sh` | the **templates** — frontmatter, manifest integrity, placeholder coverage, guard hygiene, docs drift | before changing this repo, and in CI |
 | `./test/integration.sh` | the **lifecycle** — six stacks, upgrade, tier switch, uninstall, degraded environments | before a release |
 
 `test/hooks.sh` is the one that matters most and the one that did not exist.
 It builds a synthetic project, substitutes the placeholders the way
-`configure.sh` would, and asserts 76 behaviours — the bypass matrix above,
+`configure.sh` would, and asserts 99 behaviours — the bypass matrix above,
 twenty shell-write forms that must block, eleven everyday commands that must
 not, the two allowlist-disarm tokens, and the filter's exit status in both
-directions. Its own assertions are mutation-checked: restoring the pre-2.1
-`gate-check.sh` turns 19 of them red.
+directions.
 
-All of it runs in CI on three separate jobs — with `jq`, without `jq`, and with
-neither `jq` nor `python` — because each hook has three JSON parsers and only
+Its own assertions are mutation-checked, and that check is automated rather
+than remembered. `bash qa.sh --mutate` copies the tree once per mutation,
+reintroduces a defect this repository has actually shipped, and requires the
+named suite to go red — 22 of them, covering the gate, both doors, the
+evidence filter, both ratchets and the template contract. It reports three
+outcomes, and the third is the one that matters: a mutation whose anchor text no
+longer exists is **BROKEN**, not caught. An un-applied mutation runs a clean
+tree and is of course green, and counting that as a pass is how a mutation suite
+rots into a very slow way of running the tests twice.
+
+It earned its place on the first run: **5 of 22 mutations escaped**, in a suite
+set that had been green the whole time.
+
+| Escape | What it turned out to be |
+|---|---|
+| `filter-exit-status` | `qa.sh` checked for `PIPESTATUS` with a bare `grep`, which matched the **comment explaining why PIPESTATUS is needed**. The exit-status fix could be deleted and the shape check stayed green. It now strips comments first, as two neighbouring checks already did |
+| `gate-keystroke-answer` | the one-token case passed `--problem "x" --red "y"`, and the **red** guard refused first. The problem-length guard had no coverage at all; each field is now poisoned with the other left valid |
+| `gate-empty-problem` | omitting a flag entirely was never tested — and once it was, it turned out the dense-length guard refuses it anyway. The `MISSING` check buys the *diagnosis*, not the refusal, so the test now asserts the message |
+| `profile-accepts-pipe` | an **equivalent mutant**: `check_row_shape` refuses the malformed row before the value-level guard is reached, so behaviour genuinely did not change. The mutation was re-pointed at the guard that enforces the rule |
+| `profile-accepts-newline` | the CR/newline guard had **no test whatsoever** — and it is the guard whose own first version was broken (`"$(printf '\n')"` collapses to the empty string, making the pattern `**`, which matched every value there is). The fix for the false-green incident this repo documents had itself shipped untested |
+
+Three real gaps, one test passing through the wrong guard, one equivalent
+mutant. That ratio is normal, and it is the argument for the harness: none of
+the five is visible from a green run, and four of them are in assertions
+somebody wrote *specifically* to catch the defect that walked past them.
+
+Writing the CR case also caught the harness lying again, which is the failure
+mode this repo keeps rediscovering. `setfield.py` read the injected value with
+Python's default text mode — **universal newlines**, which silently rewrites a
+lone carriage return to a newline. The case was therefore writing a newline
+into the profile row, testing something else entirely, and reporting that
+`configure.sh` accepts a value it in fact rejects. The product was correct; the
+test was not. Same shape as the MSYS path rewriting documented in that suite,
+and the reason every value there now travels through a file opened with
+`newline=""`.
+
+All of it runs in CI across 11 jobs. Three of them run the hook suite three
+ways — with `jq`, without `jq`, and with both `jq` and `python` **present on
+PATH and exiting 127** — because each hook has three JSON parsers and only
 **one** of them runs on any given machine. The branch CI takes and the branch
 your laptop takes have to agree byte for byte; a filter bug confined to the `jq`
 branch is invisible locally and red on every push.
+
+The third of those is the configuration that found real bugs, and it is the one
+usually left out. `command -v jq` proves a file is on PATH, not that it runs — a
+jq built against the wrong libc, a shim, a half-finished install all satisfy it
+and then fail. Every parser chain here therefore falls *through* a failure
+rather than returning from it.
 
 `qa.sh` is deliberately strict about failures that are invisible at install time
 and expensive later: an agent whose `name:` does not match its filename never
@@ -506,6 +551,24 @@ bash .claude/scripts/coverage-gate.sh coverage.txt
 | an unlisted file | may not cross the bar at all |
 | the bar itself | lives in the baseline file, so changing it is a committed diff somebody can object to — not an edit to a tool |
 | coverage | fails **below** the floor, and also fails far **above** it, asking for the floor to be raised. A floor that drifts far below reality certifies nothing while still looking like a gate |
+| a runner that prints no total | is **refused**, never guessed at — see below |
+
+That last row was not a design principle; it was a bug report. `coverage-gate.sh`
+parses five ecosystems, and until `test/coverage.sh` existed exactly one of them
+had been exercised — against text written to match the pattern it was testing.
+Checked against real output, four of the five were wrong, and two were wrong in
+the shape that matters:
+
+| | was | actually |
+|---|---|---|
+| `go test -cover ./...` | reported the **last package's** figure as the project total — 50.0% measured on a tree whose real total was 28.6%, and which package sorts last is arbitrary | refused: Go prints no aggregate there, so the gate names `go tool cover -func`, which does |
+| SimpleCov's `SimpleFormatter` | reported the **last file's** figure — 100.0% | refused: per-file rows, no total |
+| `go tool cover -func` | rejected — Go's only genuine total | parsed |
+| PHPUnit | claimed in a comment, matched by nothing | parsed; only **Pest** prints `Total: n %` |
+| SimpleCov (default) | looked for `Line Coverage: 91.2%`, which SimpleCov has never printed | parsed: `Line coverage: 123 / 456 (26.97%)` |
+
+A refusal is recoverable. A confident wrong number becomes the floor, and a
+floor is the one figure nobody re-derives later.
 
 `configure.sh` records the size baseline against the tree as it is on the day
 you install, so the bar applies to what happens next rather than to a backlog

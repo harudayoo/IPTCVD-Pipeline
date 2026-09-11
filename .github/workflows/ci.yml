@@ -94,6 +94,47 @@ jobs:
       - name: Shrink allowed, growth refused, new crossings refused
         run: bash test/ratchet.sh
 
+  coverage-parsers:
+    name: Coverage · the total, not a number that is nearby
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install a live Python coverage runner
+        # The fixtures are the contract; the live section is what notices a
+        # runner CHANGING its summary format, which a fixture cannot do on its
+        # own. Go is preinstalled on this image, so between them two of the five
+        # ecosystems are exercised against genuine output on every run.
+        run: python3 -m pip install --quiet pytest pytest-cov
+      - name: Every parser reads the project total
+        # coverage-gate.sh parses five ecosystems. Four were wrong until this
+        # suite existed, and two of those were the dangerous shape: not a
+        # refusal, a confident wrong number. `go test -cover ./...` reported the
+        # LAST PACKAGE's figure as the project total — 50.0% measured on a tree
+        # whose real total was 28.6% — and Ruby's SimpleFormatter reported the
+        # last FILE's. A coverage floor is written once and trusted for years,
+        # so an overstatement here certifies a standard the tree never met.
+        run: bash test/coverage.sh
+
+  mutation:
+    name: Mutation · can these suites fail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reintroduce each shipped defect and require a red suite
+        # Every other job here proves the suites pass. This is the only one that
+        # proves they can FAIL. Both times this repository shipped a broken
+        # test, the suite was green: a newline guard whose pattern collapsed to
+        # `**` reported eight refusals that never happened, and a fail() called
+        # with the wrong arity aborted a suite to exit 0 with no summary line.
+        # Neither is visible from a passing run.
+        run: bash qa.sh --mutate
+
   templates:
     name: Templates · qa.sh
     runs-on: ubuntu-latest

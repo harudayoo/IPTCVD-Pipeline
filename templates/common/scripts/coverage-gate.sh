@@ -35,36 +35,125 @@ if [ -z "$OUT" ] || [ ! -f "$OUT" ]; then
 fi
 
 # --- find the total ---------------------------------------------------------
-# One pattern per ecosystem, tried in order. Each is anchored to that runner's
-# SUMMARY line rather than to a bare number, because a per-file percentage
-# anywhere in the output would otherwise be read as the total.
+# One pattern per ecosystem, tried MOST SPECIFIC FIRST. Each is anchored to that
+# runner's SUMMARY line rather than to a bare number, because a per-file
+# percentage anywhere in the output would otherwise be read as the total.
+#
+# Every pattern below was checked against real output (test/fixtures/coverage/,
+# which records what was captured from a live run and what was derived from the
+# runner's own format string). That exercise found the parser wrong in four of
+# the five ecosystems it claimed, two of them silently:
+#
+#   go test -cover ./...   reported the LAST PACKAGE's figure as the project
+#                          total -- measured 50.0% on a tree whose real total
+#                          was 28.6%, and which package sorts last is arbitrary
+#   SimpleFormatter        reported the LAST FILE's figure as the project total
+#                          (100.0%), because Ruby per-file rows read
+#                          `foo.rb (coverage: 100.0%)` and the Go pattern
+#                          matched them
+#   go tool cover -func    Go's only real total, rejected outright
+#   PHPUnit                claimed in a comment, matched by nothing; only Pest
+#                          prints `Total: n %`
+#   SimpleCov              looked for `Line Coverage: 91.2%`, which SimpleCov
+#                          has never printed -- the real line is
+#                          `Line coverage: 123 / 456 (26.97%)`
 #
 # Adding a runner here is the right way to extend this. Loosening a pattern
-# until it matches something is not: a wrong number silently becomes the floor.
+# until it matches something is not: a wrong number silently becomes the floor,
+# and a floor is the one number nobody re-derives later.
+#
+# Prints either a bare number, or `AMBIGUOUS:<reason>` when the output carries
+# per-unit percentages but no total. Refusing there is not pedantry -- picking
+# one of them is how a 28.6% tree would arm its floor at 50%.
 extract() {
-  local v=""
-  # Pest / PHPUnit:            "  Total: 42.7 %"
+  local v="" n=""
+
+  # Pest: "  Total: 42.7 %". Pest's own renderer, not PHPUnit's.
   v=$(grep -oE '^[[:space:]]*Total:[[:space:]]*[0-9]+(\.[0-9]+)?[[:space:]]*%' "$OUT" 2>/dev/null \
       | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
   [ -n "$v" ] && { printf '%s' "$v"; return; }
-  # Istanbul / jest / vitest:  "All files |   82.35 |"
+
+  # PHPUnit text report: "  Lines:    42.86% (3/7)" under " Summary:".
+  # Anchored to line start on purpose: the per-class block further down prints
+  # its own "Lines:  85.71% ( 6/ 7)" MID-LINE, after the summary, so an
+  # unanchored match plus `tail -1` reads one class instead of the project.
+  v=$(grep -oE '^[[:space:]]*Lines:[[:space:]]+[0-9]+(\.[0-9]+)?%' "$OUT" 2>/dev/null \
+      | head -1 | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
+  [ -n "$v" ] && { printf '%s' "$v"; return; }
+
+  # Istanbul / c8 / jest / vitest: "All files |   82.35 |"
   v=$(grep -E '^[[:space:]]*All files[[:space:]]*\|' "$OUT" 2>/dev/null \
       | tail -1 | awk -F'|' '{gsub(/ /,"",$2); print $2}' | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
   [ -n "$v" ] && { printf '%s' "$v"; return; }
-  # coverage.py / pytest-cov:  "TOTAL   1234   56   95%"
+
+  # coverage.py / pytest-cov: "TOTAL   1234   56   95%"
   v=$(grep -E '^TOTAL[[:space:]]' "$OUT" 2>/dev/null \
       | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?%' | tail -1 | tr -d '%')
   [ -n "$v" ] && { printf '%s' "$v"; return; }
-  # Go:                        "coverage: 78.4% of statements"
-  v=$(grep -oE 'coverage:[[:space:]]*[0-9]+(\.[0-9]+)?%' "$OUT" 2>/dev/null \
-      | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
+
+  # Go, the only form that carries a real total:
+  #   "total:            (statements)    28.6%"   <- go tool cover -func
+  v=$(grep -oE '^total:[[:space:]].*[[:space:]][0-9]+(\.[0-9]+)?%' "$OUT" 2>/dev/null \
+      | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?%' | tail -1 | tr -d '%')
   [ -n "$v" ] && { printf '%s' "$v"; return; }
-  # SimpleCov (Ruby):          "Line Coverage: 91.2%"
-  v=$(grep -oE '[Ll]ine [Cc]overage:[[:space:]]*[0-9]+(\.[0-9]+)?%' "$OUT" 2>/dev/null \
-      | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
-  printf '%s' "${v:-}"
+
+  # SimpleCov: "Line coverage: 123 / 456 (26.97%)". Lowercase 'c' -- that is
+  # what lib/simplecov/formatter/base.rb formats. Anchored to Line so the
+  # "Branch coverage:" line that follows is not read instead; branch coverage
+  # is a different measurement and is usually the higher number.
+  v=$(grep -oiE '^[[:space:]]*Line coverage:[^(]*\([0-9]+(\.[0-9]+)?%\)' "$OUT" 2>/dev/null \
+      | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?%' | tail -1 | tr -d '%')
+  [ -n "$v" ] && { printf '%s' "$v"; return; }
+
+  # Go, per-package: "ok  example.com/cov  0.15s  coverage: 20.0% of statements"
+  # `of statements` is load-bearing -- without it this also matches Ruby's
+  # per-file "(coverage: 100.0%)" rows, which is exactly how a per-file figure
+  # became a project total.
+  #
+  # One package: that line IS the total. More than one: this output contains no
+  # total at all, and `tail -1` would silently pick whichever package sorted
+  # last. Go prints no aggregate here; `go tool cover -func` does.
+  n=$(grep -cE 'coverage:[[:space:]]*[0-9]+(\.[0-9]+)?%[[:space:]]*of statements' "$OUT" 2>/dev/null)
+  if [ "${n:-0}" -gt 1 ]; then
+    printf 'AMBIGUOUS:%s' "go test -cover ./... printed $n per-package figures and no total.
+  Go does not aggregate them; whichever package sorted last would become the floor.
+  Produce a real total instead:
+    go test -coverprofile=c.out ./... && go tool cover -func=c.out | tee coverage.txt"
+    return
+  fi
+  if [ "${n:-0}" = 1 ]; then
+    v=$(grep -oE 'coverage:[[:space:]]*[0-9]+(\.[0-9]+)?%[[:space:]]*of statements' "$OUT" 2>/dev/null \
+        | tail -1 | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
+    [ -n "$v" ] && { printf '%s' "$v"; return; }
+  fi
+
+  # SimpleCov's SimpleFormatter prints per-file rows and NO total:
+  #   "/app/lib/beta.rb (coverage: 100.0%)"
+  # Reporting the last of those as the project figure is the failure this whole
+  # function exists to avoid, so name it rather than guess.
+  n=$(grep -cE '\(coverage:[[:space:]]*[0-9]+(\.[0-9]+)?%\)' "$OUT" 2>/dev/null)
+  if [ "${n:-0}" -gt 0 ]; then
+    printf 'AMBIGUOUS:%s' "this output has $n per-file coverage figures and no project total
+  (SimpleCov's SimpleFormatter). Switch to the default formatter, which prints
+  Line coverage: <covered> / <total> (<percent>), or any formatter that emits a total."
+    return
+  fi
+
+  printf ''
 }
 MEASURED=$(extract)
+
+# A parse that found per-unit numbers but no total is NOT a parse failure to be
+# retried with a looser pattern. It is the one case where guessing produces a
+# plausible, wrong, permanent number.
+case "$MEASURED" in
+  AMBIGUOUS:*)
+    echo "coverage-gate: $OUT has per-unit percentages but no project total." >&2
+    echo "  ${MEASURED#AMBIGUOUS:}" >&2
+    echo "  Refusing to arm a floor off a number that is not the project's." >&2
+    exit 1
+    ;;
+esac
 
 if [ -z "${MEASURED:-}" ]; then
   echo "coverage-gate: could not find a coverage total in $OUT." >&2

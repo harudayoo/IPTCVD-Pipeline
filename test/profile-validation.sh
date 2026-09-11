@@ -43,7 +43,13 @@ trap 'cd /; rm -rf "$W"' EXIT INT TERM HUP
 cat > "$W/setfield.py" <<'PYEOF'
 import io, re, sys
 profile, label, valuefile = sys.argv[1], sys.argv[2], sys.argv[3]
-value = io.open(valuefile, encoding="utf-8").read()
+# newline="" is load-bearing. Python's default text mode is UNIVERSAL NEWLINES,
+# which silently rewrites a lone carriage return to a newline on read. So the
+# CR case below was writing a NEWLINE into the profile row, testing something
+# else entirely, and
+# reporting that configure.sh accepts a value it in fact rejects. Same shape as
+# the MSYS path rewriting documented above: the harness lying, not the product.
+value = io.open(valuefile, encoding="utf-8", newline="").read()
 text = io.open(profile, encoding="utf-8").read()
 pattern = r"(\|\s*" + re.escape(label) + r"\s*\|)[^|]*(\|)"
 new, n = re.subn(pattern, lambda m: m.group(1) + " " + value + " " + m.group(2),
@@ -143,6 +149,13 @@ check "test root traverses up"            'Test root'                   '../..' 
 # truncated at the pipe. Silent truncation configures the hook with something
 # the profile does not say, so the row shape is refused outright.
 check "a value containing a pipe"         'Test command (non-watching)' 'vitest run | tee out.txt'     reject
+# A carriage return mid-value survives everything between the profile and the
+# hook: field() trims spaces and tabs only, and the row parser splits on `|`.
+# It lands in hook source, where `prettier -w<CR>` is a command that does not
+# exist and the hook dies on every edit. This guard's first implementation was
+# broken in the other direction -- it rejected every value there is, while
+# reporting a precise reason -- and it had no test either way until now.
+check "a value with an embedded CR"       'Format command (fixes)'      "$(printf 'prettier -w\r--check')" reject
 
 head_ "Values that must be ACCEPTED"
 check "a plain format command"            'Format command (fixes)'      'npx prettier -w'              accept

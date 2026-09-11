@@ -16,6 +16,21 @@ set -uo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SRC" || exit 1
 
+# --mutate: can these suites FAIL? Reintroduces each defect this repository has
+# actually shipped and requires the named suite to go red. See test/mutation.sh.
+if [ "${1:-}" = "--mutate" ]; then
+  shift
+  exec bash test/mutation.sh "$@"
+fi
+
+# QA_SKIP_SUITES=1 checks template SHAPE only, skipping section 13's behaviour
+# suites. They are the slowest part by an order of magnitude, and they are also
+# what test/mutation.sh drives directly -- so running them once per mutated
+# tree, from inside qa.sh, multiplies the cost of a mutation run by four for no
+# extra signal. Never set it in CI: the shape checks alone do not test what any
+# hook DOES, which is the whole point of section 13.
+QA_SKIP_SUITES="${QA_SKIP_SUITES:-0}"
+
 PASS=0; FAIL=0; WARN=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
@@ -288,7 +303,7 @@ fi
 
 # A pipeline reports its LAST command's status, so `cmd | grep | head` turns a
 # red suite green -- and every VERIFY gate downstream reads that 0 as evidence.
-if grep -q 'PIPESTATUS' templates/common/hooks/filter-output.sh 2>/dev/null; then
+if uncommented templates/common/hooks/filter-output.sh | grep -q 'PIPESTATUS'; then
   pass "filter-output preserves the original exit status"
 else
   fail "filter-output preserves exit status (without it a failing suite reports success)"
@@ -323,7 +338,9 @@ done < <(git ls-files 2>/dev/null | grep -E '(__pycache__/|\.pyc$|\.pyo$|\.DS_St
 head_ "13. Behaviour suites"
 # qa.sh checks the templates' SHAPE. This is the only thing that checks what
 # they DO -- against the bypasses, not the happy path.
-if [ -f test/hooks.sh ]; then
+if [ "$QA_SKIP_SUITES" = 1 ]; then
+  warn "behaviour suites SKIPPED (QA_SKIP_SUITES=1) — shape checks only"
+elif [ -f test/hooks.sh ]; then
   if bash test/hooks.sh >/dev/null 2>&1; then
     pass "every bypass shape reaches the same verdict as the plain one"
   else
@@ -336,7 +353,9 @@ fi
 # The profile is the file every hook is configured FROM, and its values are
 # substituted into hook source. A value that corrupts a hook has to be refused
 # at configure time, not discovered when the hook dies on the next Bash call.
-if [ -f test/profile-validation.sh ]; then
+if [ "$QA_SKIP_SUITES" = 1 ]; then
+  :
+elif [ -f test/profile-validation.sh ]; then
   if bash test/profile-validation.sh >/dev/null 2>&1; then
     pass "configure.sh refuses profile values that would corrupt a hook"
   else
@@ -349,7 +368,9 @@ fi
 # A standard with no measurement is a preference. The ratchet is what turns the
 # rules' file-size bar into a number, and it has to ratchet in both directions
 # or it is either useless or unadoptable.
-if [ -f test/ratchet.sh ]; then
+if [ "$QA_SKIP_SUITES" = 1 ]; then
+  :
+elif [ -f test/ratchet.sh ]; then
   if bash test/ratchet.sh >/dev/null 2>&1; then
     pass "the size ratchet shrinks, refuses growth, and refuses new crossings"
   else
@@ -357,6 +378,23 @@ if [ -f test/ratchet.sh ]; then
   fi
 else
   fail "test/ratchet.sh exists"
+fi
+
+# The coverage gate parses five ecosystems' summary output, and a parser that
+# reads the WRONG number is worse than one that fails: a floor is written down
+# once and trusted for years. Four of the five were wrong until this suite
+# existed -- two of them silently, reporting a per-unit figure as the project
+# total.
+if [ "$QA_SKIP_SUITES" = 1 ]; then
+  :
+elif [ -f test/coverage.sh ]; then
+  if bash test/coverage.sh >/dev/null 2>&1; then
+    pass "every coverage parser reads the total, and output without one is refused"
+  else
+    fail "test/coverage.sh fails -- run it directly"
+  fi
+else
+  fail "test/coverage.sh exists"
 fi
 
 printf '\n\033[1m%d passed, %d failed, %d warnings\033[0m\n' "$PASS" "$FAIL" "$WARN"

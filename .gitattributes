@@ -1,0 +1,47 @@
+# Line endings are part of the product here, not a preference.
+#
+# This repository has no .gitattributes and Git for Windows defaults to
+# core.autocrlf=true, so a Windows clone gets every shell script back with CRLF
+# terminators. Git stores LF, so CI on Linux never sees it and every job stays
+# green -- the failure is invisible from the place that checks.
+#
+# It matters because install.sh COPIES these hooks into a user's repository.
+# The hooks then run under whatever bash that user's environment provides, and
+# a CRLF script under a Linux bash dies on its first line:
+#
+#   .claude/hooks/gate-check.sh: line 2: $'\r': command not found
+#
+# A hook that dies on line 2 does not block anything. It is the exact failure
+# this pipeline exists to remove -- an enforcement layer that is not running,
+# reporting nothing, indistinguishable from one that is working -- shipped by
+# the install step itself. Install on Windows, run on WSL or in a container,
+# and the gate is gone.
+#
+# So: shell is pinned to LF everywhere, regardless of platform or local config.
+* text=auto
+
+*.sh text eol=lf
+*.jq text eol=lf
+*.bash text eol=lf
+
+# manifest.conf is SOURCED (`. "$M"`), so a CR rides along on the last value of
+# every assignment: TIER_ID ends with a carriage return and compares equal to nothing.
+*.conf text eol=lf
+
+# A workflow file is shell too, one indent level down. The runner extracts each
+# `run:` block and feeds it to bash, so CRLF here puts a CR on the end of every
+# command line in every job -- on the Linux runner, where it is fatal.
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Hook and script TEMPLATES are shell too, whatever they are named, and these
+# are the files that land in a user's repository.
+templates/common/hooks/** text eol=lf
+templates/common/scripts/** text eol=lf
+
+# Coverage fixtures are captured bytes from real test runners, and the point of
+# them is that they are what a runner actually printed. Re-terminating those
+# lines edits the evidence: every parser in coverage-gate.sh is anchored with
+# `[[:space:]]` and `$`, and a stray CR is whitespace that was not in the
+# original output. A fixture normalised by a checkout is no longer a capture.
+test/fixtures/** -text

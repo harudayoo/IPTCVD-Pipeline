@@ -1,0 +1,6 @@
+example.com/cov/alpha.go:3:	Add		100.0%
+example.com/cov/alpha.go:5:	Sub		0.0%
+example.com/cov/alpha.go:7:	NeverCalled	0.0%
+example.com/cov/beta/beta.go:3:	Upper		100.0%
+example.com/cov/beta/beta.go:5:	UnusedOne	0.0%
+total:				(statements)	28.6%

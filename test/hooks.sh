@@ -269,8 +269,52 @@ fi
 # ------------------------------------------------------------ 12. gate.sh CLI
 head_ "12. gate.sh refuses an answer that is not an answer"
 if [ -f .claude/scripts/gate.sh ]; then
-  bash .claude/scripts/gate.sh create --problem "x" --red "y" >/dev/null 2>&1 \
+  # One field poisoned at a time, the other left VALID. With both short, this
+  # exits 1 whichever guard fires, so neutering either one leaves the suite
+  # green -- which is exactly what qa.sh --mutate caught.
+  GOOD_P="National finance summed every chapter twice"
+  GOOD_R="DuesServiceTest::test_totals fails on the duplicate join"
+
+  bash .claude/scripts/gate.sh create --problem "x" --red "$GOOD_R" >/dev/null 2>&1 \
     && fail "refuses a one-token problem" "exit 1" "exit 0" || pass "refuses a one-token problem"
+  bash .claude/scripts/gate.sh create --problem "$GOOD_P" --red "y" >/dev/null 2>&1 \
+    && fail "refuses a one-token red" "exit 1" "exit 0" || pass "refuses a one-token red"
+
+  # Omitting a flag entirely is a different code path from supplying a short
+  # value, and nothing exercised it. The gate once stored {"phase":"create"}
+  # and nothing else, so "the flag was never passed" is the case that shipped.
+  #
+  # Asserted on the MESSAGE, not just the exit status. An omitted flag is
+  # already refused by the dense-length guard further down -- zero characters
+  # is under any floor -- so a status-only assertion here passes whether the
+  # MISSING check exists or not. qa.sh --mutate proved exactly that: deleting
+  # the check left this suite green.
+  #
+  # What the MISSING check actually buys is the diagnosis. "--problem missing"
+  # tells you to pass a flag; "--problem is 0 characters of content" describes
+  # a value you never wrote. In a gate whose block message is the most-read
+  # text in the pipeline that difference IS the feature, so it is what gets
+  # tested.
+  m_missing() {  # m_missing <label> <args...>
+    local label="$1"; shift
+    local out
+    out=$(bash .claude/scripts/gate.sh create "$@" 2>&1)
+    if bash .claude/scripts/gate.sh create "$@" >/dev/null 2>&1; then
+      fail "$label" "exit 1" "exit 0"
+    elif printf '%s' "$out" | grep -qi 'missing'; then
+      pass "$label"
+    else
+      fail "$label" "a message naming the missing flag" "$(printf '%s' "$out" | head -1)"
+    fi
+  }
+  m_missing "refuses a missing --problem, and names it" --red "$GOOD_R"
+  m_missing "refuses a missing --red, and names it"     --problem "$GOOD_P"
+  m_missing "refuses both flags missing, and names them"
+
+  # Whitespace is not an answer. `--problem "            "` is twelve
+  # characters and zero content, which is why the guard measures DENSE length.
+  bash .claude/scripts/gate.sh create --problem "               " --red "$GOOD_R" >/dev/null 2>&1 \
+    && fail "refuses a whitespace-only problem" "exit 1" "exit 0" || pass "refuses a whitespace-only problem"
   bash .claude/scripts/gate.sh create --problem "National finance summed every chapter twice" --red "n/a" >/dev/null 2>&1 \
     && fail "refuses a bare n/a red" "exit 1" "exit 0" || pass "refuses a bare n/a red"
   bash .claude/scripts/gate.sh create --problem "National finance summed every chapter twice" --red "n/a: a design token has no behaviour to pin" >/dev/null 2>&1 \
