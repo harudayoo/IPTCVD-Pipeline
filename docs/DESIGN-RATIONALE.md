@@ -10,7 +10,7 @@ date: "August 2026"
 > nine" plus `qa-runner` and `security-auditor`; `--plan pro` builds the smaller
 > 7-agent pipeline documented in [`SETUP-SPEC.md`](SETUP-SPEC.md).
 >
-> Every tier shares §10's four hooks, §5's memory architecture, and §2's gate
+> Every tier shares §10's six hooks, §5's memory architecture, and §2's gate
 > discipline unchanged. The tiers differ in roster size and verification
 > fan-out, not in how strict the gates are. Read §0.2, §11 and §14 before
 > choosing a tier — the honest constraints, the token economics and the
@@ -1037,7 +1037,7 @@ Then run the polish sequence in order — design, craft, accessibility, performa
 
 # 10. Enforcement: hooks and permissions
 
-Prompts are advisory; hooks are deterministic. These four hooks are what turn a set of nicely-worded agent prompts into an actual process.
+Prompts are advisory; hooks are deterministic. These six hooks are what turn a set of nicely-worded agent prompts into an actual process. Four of them were the original design; §10.5 exists because that design had a door in it, and §10.6 because two of its load-bearing claims about token spend were measured by nothing.
 
 ## 10.1 Hook 1 — the phase gate
 
@@ -1124,7 +1124,61 @@ fi
 exit 0
 ```
 
-## 10.5 Wiring it up
+## 10.5 Hook 5 — the other door
+
+Hook 1 is registered on `Edit|Write`. That is the only tool surface it ever sees, which means the entire phase gate is one `sed -i` away from irrelevant — and an agent writing through the shell is not an exotic case, it is the common one. Measured against the four-hook design above, with the gate CLOSED: `sed -i`, `cat >`, `cp`, `npm i` and a `python -c` one-liner each walked straight past every gate in this section.
+
+So there is a fifth hook, on `Bash`. It does not re-implement the gate. It extracts the write *targets* from the command and hands each one to `gate-check.sh`, so there is one rulebook and one block message, and adding a key covers both doors at once.
+
+```bash
+#!/usr/bin/env bash
+# .claude/hooks/bash-gate.sh — extracts write targets, defers the verdict
+CMD="$(json_field "$INPUT" 'tool_input.command')"
+for target in $(extract_write_targets "$CMD"); do
+  printf '{"tool_input":{"file_path":"%s"}}' "$target" | "$(dirname "$0")/gate-check.sh" || exit 2
+done
+exit 0
+```
+
+It recognises redirects (`>`, `>>`, `>|`, `&>`), `sed -i`, `perl/ruby -i`, `tee`, `sponge`, `cp/mv/ln/rsync/install` (including `-t DIR`), `rm`, `dd of=`, `git checkout/restore/apply/mv/rm/clean`, `patch`, awk redirects, interpreter writes, and the manifest-rewriting forms of `npm`/`pnpm`/`yarn`/`composer`/`cargo`/`go`/`pip`.
+
+It fails **open** on anything it cannot parse, because a wrong block costs a retry on every unrelated command — with one exception: a payload it cannot parse at all that plainly names a guarded root is refused rather than guessed at.
+
+Give it **no exemption list.** The obvious one — keep the pipeline's own tooling runnable while the gate is closed — is matched by substring against a string the caller fully controls, so appending a trailing comment disables the whole shell gate in one token:
+
+```bash
+sed -i 's/x/y/' src/app.ts   # .claude/hooks/
+```
+
+It is also unnecessary: the scripts are invoked as `bash .claude/scripts/…`, and `bash` is not a program the hook extracts targets from. The safest allowlist is the one you can delete.
+
+## 10.6 Hook 6 — the one that only counts
+
+The preceding hooks all guard something. This one guards nothing, and it exists because of an argument this design lost with itself.
+
+§11 names the twelve levers and ranks them. The top two by value are **output filtering** and **`/clear` between phases** — and until this hook, neither had an instrument on it. Filtering was asserted in three documents ("tens of thousands of tokens become hundreds") with nothing counting bytes. `/clear` was a line in `CLAUDE.md` and an instruction telling the model to remind you. §14 of this same document sets the bar for a defensible claim about token spend, and neither lever cleared it.
+
+That is the 800-line rule again, one level up: a standard that nothing measures is a preference, and the enforcement layer being well-tested does not make the economics layer true.
+
+```bash
+#!/usr/bin/env bash
+# .claude/hooks/session-log.sh — SessionStart, fails open, read by no gate
+printf '%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+  "$(field source)" "$(gate_phase)" "${SESSION:0:8}" \
+  >> .claude/state/session-log.tsv 2>/dev/null || true
+exit 0
+```
+
+`/clear` **cannot be enforced.** No hook can make somebody type it, and one that tried would be refusing to let a session start. So it takes the `hook-integrity.sh` route instead: do not prevent the thing, make it visible. The `source` field distinguishes `clear` from `compact`, and that distinction is the whole point — a compact is the window filling up and the entire conversation being re-sent at cache-read price, where a clear would have dropped it at zero. Recording the gate phase alongside turns a count into a diagnosis: compacts landing mid-`create` is a feature that overran its window.
+
+The filter's own measurement lives in the rewrite (§10.2), which tees both ends and records bytes in, bytes returned, and the exit code. `savings.sh` reads both logs.
+
+Two rules keep this from becoming a liability of its own:
+
+1. **No gate reads either log.** The moment a gate depends on a measurement, the measurement acquires an incentive and stops being one.
+2. **Bytes are measured; tokens are estimated.** The logs record bytes because bytes are what a shell can count without a tokeniser. The ~4 bytes/token conversion is a prose rule of thumb and is optimistic for test output. Label it every time, or it becomes the confident wrong number §2 warns about — and a number nobody re-derives later is exactly how a floor gets set wrong.
+
+## 10.7 Wiring it up
 
 ```json
 // .claude/settings.json
@@ -1153,7 +1207,10 @@ exit 0
       { "matcher": "Edit|Write",
         "hooks": [{ "type": "command", "command": ".claude/hooks/gate-check.sh" }] },
       { "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": ".claude/hooks/filter-output.sh" }] }
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/bash-gate.sh" },
+          { "type": "command", "command": ".claude/hooks/filter-output.sh" }
+        ] }
     ],
     "PostToolUse": [
       { "matcher": "Edit|Write",
@@ -1161,10 +1218,16 @@ exit 0
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": ".claude/hooks/doc-staleness.sh" }] }
+    ],
+    "SessionStart": [
+      { "matcher": "startup|clear|compact|resume",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/session-log.sh" }] }
     ]
   }
 }
 ```
+
+Listing `bash-gate` above `filter-output` reads like an ordering, and it is not one: **all matching hooks run in parallel**, and Claude Code does not document which decision wins when one returns `deny` and another `allow`. Do not build a guarantee on that. What makes the pair safe is that their domains do not overlap — `filter-output` rewrites only the four exact commands from the profile (test, build, typecheck, dependency audit), and none of those produces a write target for `bash-gate` to refuse. That is a property you can test, and `test/hooks.sh` does; an ordering is not.
 
 `chmod +x .claude/hooks/*.sh` — on macOS and Linux a non-executable hook fails rather than blocking. Confirm with `/hooks`.
 
@@ -1538,7 +1601,7 @@ Run this once. It gets your app running from a clean environment, captures the i
 
 ## Phase 5 — Enforcement (Day 4, 2 hours)
 
-Write the four hooks from §10, `chmod +x .claude/hooks/*.sh`, wire `settings.json`, then **test each one deliberately**:
+Write the six hooks from §10, `chmod +x .claude/hooks/*.sh`, wire `settings.json`, then **test each one deliberately**:
 
 ```
 # Should be blocked (gate is not in 'create')
@@ -1709,7 +1772,7 @@ Every discipline you listed, and where it lives in the system.
 
 **It will not:** replace your judgement at the gates. Every gate in this design ends with you approving something. That is deliberate — the gates are where a bad plan gets caught cheaply, and an approval you rubber-stamp is a gate that does not exist. The moment you approve without reading, the pipeline degrades into an expensive way to generate confident-looking output.
 
-**Start small.** Nine agents, four hooks, six skills, two MCP servers, one pilot feature. Everything in this document beyond that is an optimisation you should only add once you can point at the specific problem it solves.
+**Start small.** Nine agents, six hooks, six skills, two MCP servers, one pilot feature. Everything in this document beyond that is an optimisation you should only add once you can point at the specific problem it solves.
 
 ---
 

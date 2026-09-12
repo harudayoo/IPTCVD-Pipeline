@@ -201,6 +201,91 @@ mutate readme-count-drift qa.sh \
   '| **Pro** | 9 | 7 | 5 |' \
   'the README advertises a tier size the manifest contradicts'
 
+# Shipped: bash-gate was added because Edit|Write is not the only way to write a
+# file, and the docs went on saying "four hooks" afterwards -- including §10 of
+# DESIGN-RATIONALE, the section a reader is told to read BEFORE changing a
+# tier's shape, which described the four-hook design with the hole still in it.
+# A reader who counts four goes looking for four and finds four.
+mutate hook-count-drift qa.sh \
+  docs/DESIGN-RATIONALE.md \
+  "Every tier shares §10's five hooks" \
+  "Every tier shares §10's four hooks" \
+  'the docs name a hook count the shipped hooks contradict'
+
+# The count can stay honest while a hook sits inert: five files in
+# templates/common/hooks, one of them registered by nobody. `verify.sh` audits
+# an INSTALL; this is the same question asked of the templates, before anything
+# is installed at all.
+mutate hook-never-registered qa.sh \
+  templates/tiers/pro/settings.json.tmpl \
+  '.claude/hooks/bash-gate.sh' \
+  '.claude/hooks/bash-gate-DISABLED.sh' \
+  'a shipped hook is never registered by a tier'
+
+# Shipped: the output filter's saving -- the largest single token lever here --
+# was asserted in three documents and measured by nothing. verify.sh checked
+# that `updatedInput` appeared in the hook's stdout, which proves the hook has
+# an opinion and nothing about whether that opinion is worth anything. A filter
+# that quietly stopped matching would keep emitting `updatedInput` forever and
+# return the entire suite every time, and every check would stay green.
+# An empty alternative makes grep -E match every line. This is the exact shape
+# of a defect this repo already shipped once: a newline guard collapsed to `**`
+# and matched everything, and eight refusal cases reported PASS while the guard
+# rejected every valid value. Two bugs cancelling to green.
+mutate filter-stops-filtering test/hooks.sh \
+  templates/common/hooks/filter-output.sh \
+  "-B2 -A8 -E '(FAIL" \
+  "-B2 -A8 -E '(|FAIL" \
+  'the output filter matches every line and returns the whole run'
+
+# The 150-line cap is the second limiter and binds only when grep itself
+# matches a lot -- a suite with 200 failures, where the filter is working
+# perfectly and the result is still far too much to send back. Raising it is
+# invisible to any test that only checks a mostly-passing run, which is why the
+# first version of this mutation ESCAPED.
+mutate filter-cap-removed test/hooks.sh \
+  templates/common/hooks/filter-output.sh \
+  "awk 'NR<=150'" \
+  "awk 'NR<=100000'" \
+  'the output filter loses its cap on a run that is nearly all failures'
+
+# The same defect one layer down: the filter still filters, but stops recording
+# what it saved, so the number goes back to being a claim.
+mutate filter-stops-recording test/hooks.sh \
+  templates/common/hooks/filter-output.sh \
+  '>> .claude/state/filter-log.tsv' \
+  '>> /dev/null' \
+  'the output filter stops recording what it saved'
+
+# A session recorder that cannot tell a /clear from a compact still produces
+# rows, still looks healthy in `savings.sh`, and answers the only question it
+# was built for -- was the window DROPPED or was it RE-SENT -- with nothing.
+mutate session-log-conflates-source test/hooks.sh \
+  templates/common/hooks/session-log.sh \
+  'SOURCE=$(field source);  [ -n "$SOURCE" ] || SOURCE="unknown"' \
+  'SOURCE="session"' \
+  'the session recorder stops telling a /clear from a compact'
+
+# A --record that appends rather than replaces doubles the project total every
+# time a monthly report is regenerated -- and it doubles it inside a COMMITTED
+# file, where nobody re-derives it. Same failure as the coverage parser that
+# reported the last package's number: not a crash, a plausible wrong figure.
+mutate savings-record-appends test/hooks.sh \
+  templates/common/scripts/savings.sh \
+  '{ [ -f "$F" ] && grep -v "^$RECORD	" "$F" 2>/dev/null; printf' \
+  '{ [ -f "$F" ] && cat "$F" 2>/dev/null; printf' \
+  'the shared rollup appends instead of replacing, doubling the project total'
+
+# The scope caveat has to be COUNTED, not asserted. A hardcoded "this machine
+# only" is correct on the day it is written and wrong the moment a teammate
+# commits a file -- at which point the report understates the project and says
+# so confidently.
+mutate savings-scope-hardcoded test/hooks.sh \
+  templates/common/scripts/savings.sh \
+  'if [ "$nshared" -le 1 ]; then' \
+  'if true; then' \
+  'the scope line claims machine-only even when teammates have recorded'
+
 section "6. Documentation drift that stops the pipeline"
 
 # Shipped: PR #2 made the gate demand problem/red without updating the six

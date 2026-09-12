@@ -103,7 +103,7 @@ case "${FILE##*/}" in
 esac
 
 if ! studio_guard "$SELF"; then
-  echo "BLOCKED: claude-studio is not configured, so the phase gate cannot be" >&2
+  echo "BLOCKED: IPTCVD Pipeline is not configured, so the phase gate cannot be" >&2
   echo "  trusted. Refusing to edit source. Fill docs/setup/PROFILE.md and run" >&2
   echo "  ./configure.sh, then ./verify.sh to confirm the gate fires." >&2
   exit 2

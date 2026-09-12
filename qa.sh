@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claude-studio repository self-test
+# IPTCVD Pipeline repository self-test
 #
 # verify.sh checks an INSTALL. This checks the TEMPLATES — the things an
 # install is built from. Run it before every release and in CI.
@@ -45,7 +45,7 @@ fm() {  # fm <file> <key>
   sed -n '/^---$/,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1
 }
 
-printf '\033[1mclaude-studio repository self-test\033[0m\n'
+printf '\033[1mIPTCVD Pipeline repository self-test\033[0m\n'
 printf '\033[2m%s\033[0m\n' "$SRC"
 
 # ---------------------------------------------------------------- 1. syntax
@@ -244,6 +244,63 @@ for t in $VALID_PLANS; do
 done
 for d in README.md docs/DESIGN-RATIONALE.md docs/SETUP-SPEC.md docs/DESIGN-STACK.md LICENSE; do
   [ -f "$d" ] && pass "present: $d" || fail "missing: $d"
+done
+
+# The hook count is the one number in the docs that says how many doors exist.
+# It shipped wrong: bash-gate was added because Edit|Write was not the only way
+# to write a file, and the docs kept saying "four hooks" afterwards -- including
+# the architecture doc a reader is told to read BEFORE changing a tier's shape.
+# A reader who counts four goes looking for four, finds four, and never learns
+# the fifth is the one holding the shell door shut.
+#
+# Counted from the hooks that actually ship, never from a number typed twice.
+nh=$(find templates/common/hooks -name '*.sh' ! -name '_*' | wc -l)
+nh=$((nh))   # strip the padding `wc` adds on some platforms
+case "$nh" in
+  3) nw=three ;; 4) nw=four ;; 5) nw=five ;; 6) nw=six ;; 7) nw=seven ;;
+  *) nw="" ;;   # past the words this check knows; the loop below then finds nothing to match
+esac
+drift=""
+for d in README.md docs/DESIGN-RATIONALE.md; do
+  # Any spelled-out count adjacent to the word "hooks" that is not the real one.
+  while IFS= read -r hit; do
+    case "$hit" in "$nw hooks") ;; *) drift="$drift $d:'$hit'" ;; esac
+  done < <(grep -ohiE '\b(three|four|five|six|seven) hooks\b' "$d" | tr 'A-Z' 'a-z' | sort -u)
+done
+if [ -n "$drift" ]; then
+  fail "docs name a hook count the repo contradicts ($nh hooks ship):$drift"
+else
+  pass "docs and templates/common/hooks agree: $nw hooks ($nh)"
+fi
+
+# "Six test layers" sat above an eight-row table for two releases. Same class
+# of drift as the hook count: a number typed once, then outlived by the thing
+# it counts. Count the rows.
+if grep -qE '^### [A-Z][a-z]+ test layers' README.md; then
+  nlayers=$(awk '/^### [A-Z][a-z]+ test layers/{f=1;next} f&&/^\| `\.\//{n++} f&&/^$/&&n{print n;exit}' README.md)
+  said=$(grep -oE '^### ([A-Z][a-z]+) test layers' README.md | awk '{print tolower($2)}')
+  case "$nlayers" in
+    5) want=five ;; 6) want=six ;; 7) want=seven ;; 8) want=eight ;; 9) want=nine ;; *) want="" ;;
+  esac
+  if [ -z "$want" ]; then
+    warn "README test-layer heading: $nlayers rows is past the words this check knows"
+  elif [ "$said" = "$want" ]; then
+    pass "README test-layer heading matches the table ($nlayers)"
+  else
+    fail "README says '$said test layers' over a table with $nlayers rows"
+  fi
+fi
+
+# Every shipped hook must also be registered by every tier, or it is a file
+# nobody runs. The count above would still read five while one sat inert.
+for t in $VALID_PLANS; do
+  unreg=""
+  for h in templates/common/hooks/*.sh; do
+    b="$(basename "$h")"; case "$b" in _*) continue ;; esac
+    grep -q "hooks/$b" "templates/tiers/$t/settings.json.tmpl" || unreg="$unreg $b"
+  done
+  [ -z "$unreg" ] && pass "$t registers every shipped hook" \
+                  || fail "$t ships but never registers:$unreg"
 done
 
 # ---------------------------------------------- 10. no broken repo links

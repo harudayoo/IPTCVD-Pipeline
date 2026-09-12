@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claude-studio configure
+# IPTCVD Pipeline configure
 #
 # Reads docs/setup/PROFILE.md (which YOU have confirmed by running each
 # command) and substitutes the placeholders left behind by install.sh.

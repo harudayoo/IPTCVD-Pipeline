@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claude-studio hook behaviour test
+# IPTCVD Pipeline hook behaviour test
 #
 # verify.sh checks an INSTALL. qa.sh checks the TEMPLATES' shape. This checks
 # what the hooks actually DO -- against the bypass shapes that have defeated
@@ -42,7 +42,7 @@ mkdir -p "$WORK/.claude/hooks" "$WORK/.claude/state" "$WORK/.claude/scripts" \
          "$WORK/src/services" "$WORK/src/components" "$WORK/src/http" \
          "$WORK/docs/specs" "$WORK/tests"
 
-for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post-edit.sh; do
+for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post-edit.sh session-log.sh; do
   [ -f "$SRC/templates/common/hooks/$h" ] || continue
   sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
       -e 's|{{TEST_ROOT}}|tests|g' \
@@ -56,7 +56,7 @@ for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post
       -e 's|{{TYPECHECK_GLOB}}|*.ts|g' \
       "$SRC/templates/common/hooks/$h" > "$WORK/.claude/hooks/$h"
 done
-cp "$SRC/templates/common/scripts/gate.sh" "$WORK/.claude/scripts/" 2>/dev/null || true
+cp "$SRC/templates/common/scripts/gate.sh" "$SRC/templates/common/scripts/savings.sh" "$WORK/.claude/scripts/" 2>/dev/null || true
 chmod +x "$WORK/.claude/hooks/"*.sh "$WORK/.claude/scripts/"*.sh 2>/dev/null || true
 
 : > "$WORK/src/services/dues.ts"
@@ -256,6 +256,105 @@ printf '{"tool_input":{"command":"ls -la"}}' | bash .claude/hooks/filter-output.
 printf '{"tool_input":{"command":"npm test | tee out.txt"}}' | bash .claude/hooks/filter-output.sh 2>/dev/null \
   | grep -q '^{}$' && pass "leaves an already-piped command alone" || fail "leaves an already-piped command alone" "{}" "other"
 
+# The saving this hook exists for was, until now, the one number in the repo
+# with no instrument on it: verify.sh checked that `updatedInput` appeared in
+# the hook's stdout, which proves the hook has an opinion and nothing about
+# whether the opinion is worth anything. A filter that quietly stopped matching
+# would keep emitting `updatedInput` forever and return the full suite every
+# time. So: run a LOUD command through the rewrite and require the row.
+cat > "$WORK/npm" <<'STUB'
+#!/usr/bin/env bash
+for i in $(seq 1 400); do echo "PASS  src/module_$i.test.ts  (12ms)"; done
+echo "FAIL  src/services/dues.test.ts"
+echo "Tests: 1 failed, 400 passed"
+exit 1
+STUB
+chmod +x "$WORK/npm"
+rm -f .claude/state/filter-log.tsv
+OUT=$(PATH="$WORK:$PATH" bash -c "$CMD_OUT" 2>&1); RC=$?
+RAW=$(PATH="$WORK:$PATH" npm test 2>&1 | wc -c | tr -d ' ')
+GOT=$(printf '%s' "$OUT" | wc -c | tr -d ' ')
+[ "$RC" = "1" ] && pass "a 400-line suite still reports its failure" \
+                || fail "a 400-line suite still reports its failure" "exit 1" "exit $RC"
+if [ "$GOT" -lt $(( RAW / 10 )) ]; then
+  pass "returns under a tenth of the output ($GOT of $RAW bytes)"
+else
+  fail "returns under a tenth of the output" "< $(( RAW / 10 )) bytes" "$GOT bytes"
+fi
+if [ -s .claude/state/filter-log.tsv ]; then
+  read -r _ts LRAW LFLT _rc < .claude/state/filter-log.tsv
+  if [ "${LRAW:-0}" -gt "${LFLT:-0}" ] 2>/dev/null; then
+    pass "records what it saved (${LRAW} -> ${LFLT} bytes)"
+  else
+    fail "records what it saved" "raw > filtered" "raw=${LRAW:-?} filtered=${LFLT:-?}"
+  fi
+else
+  fail "records what it saved" "a row in filter-log.tsv" "no log written"
+fi
+
+# The 150-line cap is the SECOND limiter, and it binds in the case the first
+# one cannot help with: a run that is nearly all failures. grep is then doing
+# its job perfectly and still matching hundreds of lines, which is exactly the
+# volume this hook exists to keep out of the window. A test that only exercises
+# a mostly-passing suite never reaches this branch -- the cap can be raised to
+# 100000 and every other assertion here stays green.
+cat > "$WORK/npm" <<'STUB'
+#!/usr/bin/env bash
+for i in $(seq 1 400); do echo "FAIL  src/services/module_$i.test.ts"; done
+echo "Tests: 400 failed, 0 passed"
+exit 1
+STUB
+chmod +x "$WORK/npm"
+LINES=$(PATH="$WORK:$PATH" bash -c "$CMD_OUT" 2>&1 | wc -l | tr -d ' ')
+if [ "$LINES" -le 160 ]; then
+  pass "caps a run that is nearly all failures ($LINES lines)"
+else
+  fail "caps a run that is nearly all failures" "<= 160 lines" "$LINES lines"
+fi
+
+# The measurement must degrade to NOTHING rather than take the command with it.
+# With no mktemp the two temp paths are empty strings, `tee ""` cannot open a
+# file -- and must still pass stdin through to stdout. If it did not, a missing
+# mktemp would mean the model receives an empty test run with a correct-looking
+# exit code, which is worse than any amount of unfiltered output.
+NOMK="__r=\$(false 2>/dev/null) __f=\$(false 2>/dev/null); npm test 2>&1 | tee \"\$__r\" 2>/dev/null | grep -E '(FAIL|Tests:)' | awk 'NR<=150' | tee \"\$__f\" 2>/dev/null; exit \${PIPESTATUS[0]}"
+OUT=$(PATH="$WORK:$PATH" bash -c "$NOMK" 2>&1); RC=$?
+if [ -n "$OUT" ] && [ "$RC" = "1" ]; then
+  pass "survives a missing mktemp (output and status both intact)"
+else
+  fail "survives a missing mktemp" "output, exit 1" "$(printf '%s' "$OUT" | wc -c) bytes, exit $RC"
+fi
+
+# ----------------------------------------- 10b. the two Bash hooks cannot race
+head_ "10b. bash-gate and filter-output have no command in common"
+# settings.json lists bash-gate above filter-output, which READS like an
+# ordering and is not one: Claude Code runs all matching hooks in PARALLEL, and
+# does not document which decision wins when one returns deny and another
+# returns allow. A guarantee built on that list order is a guarantee built on
+# undocumented behaviour -- the exact shape of claim 4 this repo exists to
+# refuse, sitting in a settings comment where nobody would test it.
+#
+# What actually makes the pair safe is that their domains are DISJOINT:
+# filter-output rewrites only the four commands named in the profile, and none
+# of those produces a write target for bash-gate to refuse. Then no order can
+# matter, because at most one hook ever has an opinion. That is a property, and
+# a property can be tested. Order cannot.
+#
+# The gate is CLOSED here: if any of these four were ever gate-relevant, this
+# is the state in which it would show.
+set_gate '{"phase":"idle"}'
+for c in "npm test" "npm run build" "tsc --noEmit" "npm audit"; do
+  b "bash-gate stays silent on '$c'" "$c" 0
+done
+# And the converse, so the disjointness is checked from both sides: a command
+# bash-gate DOES refuse must never be one filter-output would have rewritten.
+for c in "sed -i 's/x/y/' src/services/dues.ts" "cat > src/services/new.ts" "npm i left-pad"; do
+  printf '{"tool_input":{"command":"%s"}}' "$(esc_json "$c")" \
+    | bash .claude/hooks/filter-output.sh 2>/dev/null | grep -q '^{}$' \
+    && pass "filter-output declines '$c'" \
+    || fail "filter-output declines '$c'" "{}" "a rewrite of a gated command"
+done
+
 # ------------------------------------------------------------ 11. the recorder
 head_ "11. gate decisions are recorded"
 if [ -s .claude/state/gate-log.tsv ]; then
@@ -265,6 +364,84 @@ if [ -s .claude/state/gate-log.tsv ]; then
 else
   fail "gate-log.tsv has entries" "a non-empty log" "empty or missing"
 fi
+
+# ------------------------------------------------- 11b. the session recorder
+head_ "11b. session-log · the lever that cannot be enforced is at least counted"
+rm -f .claude/state/session-log.tsv
+set_gate '{"phase":"create","problem":"National finance summed every chapter twice","red":"DuesTest::national_excludes_chapter fails"}'
+printf '{"source":"clear","session_id":"aaaaaaaabbbb"}'   | bash .claude/hooks/session-log.sh >/dev/null 2>&1
+printf '{"source":"compact","session_id":"ccccccccdddd"}' | bash .claude/hooks/session-log.sh >/dev/null 2>&1
+
+# A clear and a compact must be TELLABLE APART. That distinction is the entire
+# value of the log: a compact is the window filling and the whole conversation
+# being re-sent at cache-read price, where a clear would have dropped it at
+# zero. A recorder that collapsed both to "session started" would still produce
+# rows, still look healthy, and answer nothing.
+if [ -s .claude/state/session-log.tsv ]; then
+  grep -q "$(printf 'clear	create')" .claude/state/session-log.tsv     && pass "records a /clear with the gate phase it happened at"     || fail "records a /clear with the gate phase" "clear<TAB>create" "$(head -1 .claude/state/session-log.tsv)"
+  grep -q "$(printf 'compact	create')" .claude/state/session-log.tsv     && pass "tells a compact apart from a clear"     || fail "tells a compact apart from a clear" "a compact row" "none"
+  [ "$(wc -l < .claude/state/session-log.tsv | tr -d ' ')" = 2 ]     && pass "one row per session start, no more"     || fail "one row per session start" "2 rows" "$(wc -l < .claude/state/session-log.tsv | tr -d ' ')"
+else
+  fail "records a session start" "a row in session-log.tsv" "no log written"
+fi
+
+# It must never be able to stop a session from starting -- including on the
+# malformed input a runtime change could hand it.
+for bad in '' 'not json at all' '{"source":}'; do
+  printf '%s' "$bad" | bash .claude/hooks/session-log.sh >/dev/null 2>&1
+  rc=$?
+  [ "$rc" = 0 ] || fail "fails open on malformed input" "exit 0" "exit $rc"
+done
+pass "fails open on malformed input (empty, non-JSON, truncated)"
+
+# ------------------------------------------------ 11c. the shared rollup
+head_ "11c. savings.sh · solo stays silent, a team gets a real total"
+git init -q . >/dev/null 2>&1 || true
+git config user.name "Test Dev" >/dev/null 2>&1
+git config user.email "test@example.invalid" >/dev/null 2>&1
+rm -rf docs/reports/savings
+printf '2026-09-01T00:00:00Z	48210	640	1
+2026-09-01T00:05:00Z	51000	312	0
+'   > .claude/state/filter-log.tsv
+
+# Solo: nothing is written unless asked, and the scope line says so.
+OUT=$(bash .claude/scripts/savings.sh 2>&1)
+case "$OUT" in
+  *"this machine only"*) pass "solo: names its own scope" ;;
+  *) fail "solo: names its own scope" "'this machine only'" "$(printf '%s' "$OUT" | tail -1)" ;;
+esac
+[ -d docs/reports/savings ] && fail "solo: writes nothing unbidden" "no shared dir" "a shared dir"                             || pass "solo: writes nothing unbidden"
+
+# --record is IDEMPOTENT. A monthly report generated twice must not double the
+# project total -- that is a wrong number in a committed file, which is the
+# failure this whole log exists to avoid.
+bash .claude/scripts/savings.sh --record 2026-09 >/dev/null 2>&1
+bash .claude/scripts/savings.sh --record 2026-09 >/dev/null 2>&1
+bash .claude/scripts/savings.sh --record 2026-09 >/dev/null 2>&1
+NROW=$(cat docs/reports/savings/*.tsv 2>/dev/null | wc -l | tr -d ' ')
+[ "$NROW" = "1" ] && pass "--record three times leaves one row"                   || fail "--record is idempotent" "1 row" "$NROW rows"
+read -r _m RUNS RAW FLT _s _c _k < docs/reports/savings/*.tsv
+{ [ "$RUNS" = "2" ] && [ "$RAW" = "99210" ] && [ "$FLT" = "952" ]; }   && pass "--record totals the month correctly ($RUNS runs, $RAW -> $FLT)"   || fail "--record totals the month" "2 / 99210 / 952" "$RUNS / $RAW / $FLT"
+
+# A second developer's file must change the scope line AND the total. The
+# failure worth catching is the one that stays quiet: a team report still
+# claiming "this machine only" while three files sit next to it.
+printf '2026-09	100	900000	5000	20	15	1
+' > docs/reports/savings/someone-else-0000.tsv
+OUT=$(bash .claude/scripts/savings.sh 2>&1)
+case "$OUT" in
+  *"2 developers have"*) pass "team: counts the developers it can see" ;;
+  *) fail "team: counts the developers" "'2 developers have'" "$(printf '%s' "$OUT" | grep -c developer) mentions" ;;
+esac
+case "$OUT" in
+  *"this machine only"*) fail "team: drops the solo caveat" "no solo caveat" "still claims machine-only" ;;
+  *) pass "team: drops the solo caveat once it is false" ;;
+esac
+case "$OUT" in
+  *PROJECT*999210*) pass "team: sums to the project total (999210 bytes)" ;;
+  *) fail "team: sums to the project total" "PROJECT ... 999210" "no matching row" ;;
+esac
+rm -rf docs/reports/savings
 
 # ------------------------------------------------------------ 12. gate.sh CLI
 head_ "12. gate.sh refuses an answer that is not an answer"

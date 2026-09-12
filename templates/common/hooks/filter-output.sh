@@ -62,7 +62,34 @@ case "$CMD" in *\|*|*\>*) echo '{}'; exit 0 ;; esac
 # vocabulary quietly eats a real lint or audit finding and leaves behind an
 # exit code nobody can explain.
 FILTER="grep -B2 -A8 -E '(FAIL|ERROR|Error|error:|✕|✗|✘|✖|^ *[0-9]+:[0-9]+ +(error|warning)|problems? \(|assert|Exception|vulnerabilit|advisor|Timed out|^ *Tests?: |^ *Duration: |\[OK\]|built in |No security vulnerability|[0-9]+ (passed|failed|vulnerabilities))'"
-NEW="$CMD 2>&1 | $FILTER | awk 'NR<=150'; __rc=\${PIPESTATUS[0]}; [ \"\$__rc\" -ne 0 ] && echo \"[filter-output] command exited \$__rc — output above is matched lines only\"; exit \$__rc"
+
+# --- and it must MEASURE what it claims to save ----------------------------
+#
+# This is the largest token saving in the pipeline and, until this block, the
+# only major one with no instrument on it. The repo's own standard for a
+# defensible number (DESIGN-RATIONALE §14) is "sampled unfiltered output
+# averaged 11,400 tokens; filtered averaged 890" -- a mechanism, a count and a
+# measurement. Nothing produced that sample. `verify.sh` checked only that the
+# string `updatedInput` appeared in this hook's stdout, which proves the hook
+# has an opinion, not that the opinion ever reaches the model or is worth
+# anything when it does.
+#
+# So the rewrite tees both ends and records the pair. Two `tee`s, no change to
+# what the model sees and none to the exit status: ${PIPESTATUS[0]} still names
+# $CMD because tee is downstream of it. `bash .claude/scripts/savings.sh` reads
+# the log.
+#
+# Every part of this is `|| true` and `2>/dev/null`. A recorder that can fail a
+# build has inverted the point of the hook it lives in: this file fails OPEN,
+# and measurement is never the thing that closes it.
+LOGGER="__r=\$(mktemp 2>/dev/null) __f=\$(mktemp 2>/dev/null)"
+NEW="$LOGGER; $CMD 2>&1 | tee \"\$__r\" 2>/dev/null | $FILTER | awk 'NR<=150' | tee \"\$__f\" 2>/dev/null"
+# [0] and not [1]: `$LOGGER` ends in `;`, so the pipeline starts at $CMD. The
+# added `tee`s are all DOWNSTREAM of it and shift nothing.
+NEW="$NEW; __rc=\${PIPESTATUS[0]}"
+NEW="$NEW; { [ -n \"\$__r\" ] && [ -n \"\$__f\" ] && mkdir -p .claude/state && printf '%s\t%s\t%s\t%s\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"\$(wc -c < \"\$__r\" | tr -d ' ')\" \"\$(wc -c < \"\$__f\" | tr -d ' ')\" \"\$__rc\" >> .claude/state/filter-log.tsv; } 2>/dev/null || true"
+NEW="$NEW; rm -f \"\$__r\" \"\$__f\" 2>/dev/null || true"
+NEW="$NEW; [ \"\$__rc\" -ne 0 ] && echo \"[filter-output] command exited \$__rc — output above is matched lines only\"; exit \$__rc"
 
 # -c is load-bearing, not cosmetic. `jq -n` PRETTY-PRINTS by default, so this
 # branch would emit multi-line JSON while the printf branch emits one line --

@@ -81,7 +81,7 @@ Design exploration that writes real component files belongs in the CREATE phase,
 where the gate is already open, or in a scratch directory outside the protected
 source roots. Never widen the gate to make a design tool comfortable.
 
-See [the design-stack playbook](https://github.com/harudayoo/claude-studio-pro/blob/main/docs/DESIGN-STACK.md) for the adoption procedure.
+See [the design-stack playbook](https://github.com/harudayoo/IPTCVD-Pipeline/blob/main/docs/DESIGN-STACK.md) for the adoption procedure.
 
 ## Checking conformance
 

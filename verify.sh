@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claude-studio self-test
+# IPTCVD Pipeline self-test
 #
 # Proves the hooks actually fire, and that the installed inventory matches the
 # tier that was installed. Run after configure.sh and again any time you change
@@ -46,7 +46,7 @@ else
   TIER_UI_AGENTS=""; TIER_UI_SKILLS=""; TIER_UI_RULES=""
 fi
 
-printf '\n\033[1mclaude-studio self-test\033[0m  ·  %s plan\n' "$TIER_NAME"
+printf '\n\033[1mIPTCVD Pipeline self-test\033[0m  ·  %s plan\n' "$TIER_NAME"
 
 head_ "0. Configuration"
 if [ -n "$PLAN" ] && [ -f "$MANIFEST" ]; then
@@ -170,6 +170,32 @@ fi
 [ -f .claude/scripts/coverage-gate.sh ] \
   && pass "coverage-gate.sh is installed" \
   || fail "coverage-gate.sh is installed"
+
+head_ "3e. Levers that are measured, not just claimed"
+# Output filtering is the largest token saving here and /clear between phases
+# is the largest one nothing can enforce. Both were asserted in prose and
+# instrumented by nothing, which is the same failure as the 800-line rule that
+# sat in the standards for months while 13 files sat over it.
+if [ -f .claude/hooks/session-log.sh ]; then
+  printf '{"source":"clear","session_id":"verify00"}' \
+    | bash .claude/hooks/session-log.sh >/dev/null 2>&1
+  if grep -q 'clear' .claude/state/session-log.tsv 2>/dev/null; then
+    pass "session-log.sh records a /clear"
+  else
+    fail "session-log.sh records a /clear (it fired but wrote no row)"
+  fi
+else
+  fail "session-log.sh is installed - without it no one can tell a /clear from a compact"
+fi
+grep -q 'SessionStart' .claude/settings.json 2>/dev/null \
+  && pass "SessionStart is registered" \
+  || fail "SessionStart is registered - session-log.sh would never fire"
+grep -q 'filter-log' .claude/hooks/filter-output.sh 2>/dev/null \
+  && pass "filter-output records what it saved" \
+  || fail "filter-output records what it saved - its saving would be an assertion again"
+[ -f .claude/scripts/savings.sh ] \
+  && pass "savings.sh is installed (bash .claude/scripts/savings.sh)" \
+  || fail "savings.sh is installed - both logs would accumulate with nothing reading them"
 
 head_ "4. Doc check"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
