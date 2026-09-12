@@ -1,4 +1,4 @@
-# claude-studio
+# IPTCVD Pipeline
 
 A governed development pipeline for Claude Code, sized to your plan.
 
