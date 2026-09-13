@@ -55,13 +55,17 @@ field() {   # field <key> -- best-effort, never fatal
 SOURCE=$(field source);  [ -n "$SOURCE" ] || SOURCE="unknown"
 SESSION=$(field session_id); [ -n "$SESSION" ] || SESSION="-"
 
-PHASE="-"
+# Each parser must SUCCEED AND RETURN SOMETHING before it counts; the "-"
+# default is applied once, at the end. Seeding PHASE with "-" up front made the
+# sentinel mean both "not resolved yet" and "give up", so the grep fallback
+# below could never fire -- in exactly the jq-degraded case it exists for.
+PHASE=""
 if [ -f "$STATE/gate.json" ]; then
   if command -v jq >/dev/null 2>&1; then
-    PHASE=$(jq -r '.phase // "-"' "$STATE/gate.json" 2>/dev/null) || PHASE="-"
+    PHASE=$(jq -r '.phase // ""' "$STATE/gate.json" 2>/dev/null) || PHASE=""
   fi
   case "$PHASE" in ""|null) PHASE=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATE/gate.json" 2>/dev/null \
-      | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//') ;;
+      | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//') || PHASE="" ;;
   esac
 fi
 [ -n "$PHASE" ] || PHASE="-"

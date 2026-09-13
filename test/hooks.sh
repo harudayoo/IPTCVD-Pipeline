@@ -385,6 +385,18 @@ else
   fail "records a session start" "a row in session-log.tsv" "no log written"
 fi
 
+# The phase must survive a parser that is PRESENT and BROKEN. Not hypothetical:
+# it shipped that way and passed on every machine with a working jq -- which is
+# every developer machine. The two CI jobs that degrade the environment caught
+# it; a local run did not. Staging the break inside the assertion means this
+# holds wherever the suite runs, and the mutation suite -- which runs each suite
+# in the ambient environment, jq and all -- can guard it too.
+rm -f .claude/state/session-log.tsv
+mkdir -p "$WORK/brokenbin"
+printf '#!/bin/sh\nexit 127\n' > "$WORK/brokenbin/jq"; chmod +x "$WORK/brokenbin/jq"
+printf '{"source":"clear","session_id":"eeeeeeeeffff"}'   | PATH="$WORK/brokenbin:$PATH" bash .claude/hooks/session-log.sh >/dev/null 2>&1
+grep -q "$(printf 'clear	create')" .claude/state/session-log.tsv   && pass "records the phase even when jq is present and broken"   || fail "phase survives a broken jq" "clear<TAB>create" "$(head -1 .claude/state/session-log.tsv)"
+
 # It must never be able to stop a session from starting -- including on the
 # malformed input a runtime change could hand it.
 for bad in '' 'not json at all' '{"source":}'; do

@@ -208,8 +208,8 @@ mutate readme-count-drift qa.sh \
 # A reader who counts four goes looking for four and finds four.
 mutate hook-count-drift qa.sh \
   docs/DESIGN-RATIONALE.md \
+  "Every tier shares §10's six hooks" \
   "Every tier shares §10's five hooks" \
-  "Every tier shares §10's four hooks" \
   'the docs name a hook count the shipped hooks contradict'
 
 # The count can stay honest while a hook sits inert: five files in
