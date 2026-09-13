@@ -19,7 +19,7 @@
     "PreToolUse": [
       { "matcher": "Edit|Write",
         "hooks": [{ "type": "command", "command": ".claude/hooks/gate-check.sh" }] },
-      { "_comment": "bash-gate runs BEFORE filter-output: a command that must be refused should never be rewritten first. Without this entry the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write.",
+      { "_comment": "Without bash-gate the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write. This list is NOT an execution order: Claude Code runs all matching hooks in parallel and does not document which decision wins when one returns deny and another allow. Nothing here depends on that. The two are safe together because their domains are disjoint -- filter-output rewrites only the four profile commands, none of which yields a write target for bash-gate to refuse -- which is a property, and test/hooks.sh section 10b tests it.",
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": ".claude/hooks/bash-gate.sh" },
@@ -32,6 +32,11 @@
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": ".claude/hooks/doc-check.sh" }] }
+    ],
+    "SessionStart": [
+      { "_comment": "Records how each session began and what the gate was doing. Pure measurement, fails open, read by no gate. /clear between phases is the largest token lever here and the only major one nothing measured; this cannot enforce it, it makes it visible — the same move as hook-integrity.sh. Read with: bash .claude/scripts/savings.sh",
+        "matcher": "startup|clear|compact|resume",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/session-log.sh" }] }
     ]
   }
 }

@@ -14,7 +14,7 @@ the verification fan-out and the token budget that plan can actually afford:
 | **Max** | 11 | 9 | 6 | 3 parallel, read-only | + proposal & judge | monthly `/report` |
 | **Max 20x** | 24 | 14 | 7 | 5 parallel, read-only | + agent teams / workflows | `/studio-report` on OTel |
 
-All three share the same enforcement layer: five hooks, path-scoped rules, a
+All three share the same enforcement layer: six hooks, path-scoped rules, a
 committed gate file that carries the plan's *content*, and agent memory in
 version control. The tiers differ in how many specialists exist and how wide the
 verification fan-out is — never in how strict the gates are.
@@ -72,9 +72,9 @@ All of it is fixed, and all of it is now a test.
 ## Install
 
 ```bash
-git clone https://github.com/harudayoo/claude-studio-pro.git ~/.claude-studio
+git clone https://github.com/harudayoo/IPTCVD-Pipeline.git ~/.iptcvd-pipeline
 cd /path/to/your/project
-~/.claude-studio/install.sh
+~/.iptcvd-pipeline/install.sh
 ```
 
 The installer asks which plan you are on and installs the matching pipeline:
@@ -103,13 +103,13 @@ Choose [1-3]:
 Skip the prompt when you already know:
 
 ```bash
-~/.claude-studio/install.sh --plan max20x --target /path/to/your/project
+~/.iptcvd-pipeline/install.sh --plan max20x --target /path/to/your/project
 ```
 
 Preview without writing anything:
 
 ```bash
-~/.claude-studio/install.sh --plan max --target /path/to/project --dry-run
+~/.iptcvd-pipeline/install.sh --plan max --target /path/to/project --dry-run
 ```
 
 **Read `install.sh` before running it.** It writes into your repository. It
@@ -151,7 +151,7 @@ monthly report built on OpenTelemetry rather than anecdote.
 You can change your mind:
 
 ```bash
-~/.claude-studio/install.sh --plan pro --target .   # switches tiers
+~/.iptcvd-pipeline/install.sh --plan pro --target .   # switches tiers
 ```
 
 A tier change backs up and removes the agents, skills and rules the old tier
@@ -166,7 +166,7 @@ alone.
 ### 1. Install
 
 ```bash
-~/.claude-studio/install.sh --plan <pro|max|max20x> --target .
+~/.iptcvd-pipeline/install.sh --plan <pro|max|max20x> --target .
 ```
 
 Detects your stack, scaffolds `.claude/` and `docs/`, records the chosen tier in
@@ -193,7 +193,7 @@ Two traps the installer will flag but cannot fix for you:
 ### 3. Configure
 
 ```bash
-~/.claude-studio/configure.sh --target .
+~/.iptcvd-pipeline/configure.sh --target .
 ```
 
 Substitutes the placeholders throughout `.claude/`. **It refuses to run while
@@ -213,7 +213,7 @@ eleven.
 ## Verifying the install
 
 ```bash
-~/.claude-studio/verify.sh --target .
+~/.iptcvd-pipeline/verify.sh --target .
 ```
 
 Exercises every hook with synthetic input, checks the installed inventory
@@ -228,11 +228,11 @@ Then, inside Claude Code:
 
 ```
 /doctor      # duplicate agent names, oversized memory, skill listing overflow
-/hooks       # confirm all four registered
+/hooks       # confirm all five registered
 /context     # pre-prompt total should sit under ~15% of the window
 ```
 
-### Six test layers
+### Eight test layers
 
 | Script | Checks | Run it |
 |---|---|---|
@@ -247,10 +247,11 @@ Then, inside Claude Code:
 
 `test/hooks.sh` is the one that matters most and the one that did not exist.
 It builds a synthetic project, substitutes the placeholders the way
-`configure.sh` would, and asserts 99 behaviours — the bypass matrix above,
+`configure.sh` would, and asserts 114 behaviours — the bypass matrix above,
 twenty shell-write forms that must block, eleven everyday commands that must
-not, the two allowlist-disarm tokens, and the filter's exit status in both
-directions.
+not, the two allowlist-disarm tokens, the filter's exit status in both
+directions, that the two `Bash` hooks have no command in common, and that both
+measurement logs actually get written.
 
 Its own assertions are mutation-checked, and that check is automated rather
 than remembered. `bash qa.sh --mutate` copies the tree once per mutation,
@@ -386,7 +387,7 @@ scan work, **sonnet** for building, **opus** for irreversible decisions and
 adversarial reasoning. The installer prints which agents are on Opus, because
 that is where the cost is.
 
-### The five hooks — identical on every tier
+### The six hooks — identical on every tier
 
 | Hook | Event | Behaviour on misconfiguration |
 |---|---|---|
@@ -395,6 +396,17 @@ that is where the cost is.
 | `filter-output` | PreToolUse (Bash) | Fails open — a broken filter must never block work |
 | `post-edit` | PostToolUse (Edit/Write) | Fails open |
 | `doc-check` | Stop | Fails open |
+| `session-log` | SessionStart | Fails open — a recorder that can block a session start is one you delete |
+
+Five of those guard. The sixth only counts, and it is the newest thing here
+because of an argument this repo lost with itself: the two largest token levers
+in the pipeline were asserted in prose and measured by nothing, which is the
+same defect as an 800-line rule that thirteen files quietly ignore. `bash-gate`
+is listed above `filter-output` in `settings.json` and that is **not** an
+execution order — Claude Code runs all matching hooks in parallel and does not
+document which decision wins when one returns `deny` and another `allow`.
+Nothing here depends on it. The two are safe together because their domains do
+not overlap, which is a property, and `test/hooks.sh` §10b tests it.
 
 `bash-gate` is the other door. `gate-check` is registered on `Edit|Write`, so
 without it the entire pipeline is one `sed -i` away from irrelevant — and an
@@ -596,6 +608,108 @@ Blocks flat and high means the gate is in the wrong place. Source edits with
 found yet — and that last line is the one worth watching, because it is the only
 signal that separates "the pipeline is followed" from "the pipeline is inert".
 
+### And so is what the token levers actually did
+
+Two levers here move more tokens than everything else combined, and until
+recently both were prose:
+
+```bash
+bash .claude/scripts/savings.sh
+```
+
+**Output filtering** now records one row per test, build, typecheck and audit
+run — bytes in, bytes returned, exit code. Both raw logs are **gitignored and
+machine-local**: they are instrument readings, not the record. In this repo's own suite a 400-line
+test run measured **14,752 bytes in, 134 bytes returned**, with the failure and
+the exit status both intact. That is the shape of number `DESIGN-RATIONALE` §14
+calls defensible: a mechanism, a count, and a measurement. The old claim was
+"tens of thousands of tokens become hundreds", which is the same sentence
+without any of the three. The logged columns are **bytes**, because bytes are
+what a shell can count; `savings.sh` converts at ~4 bytes/token and labels that
+conversion indicative, which you should too.
+
+**`/clear` between phases** is the other one, and it is the awkward case: it is
+the largest lever in the pipeline and **no hook can enforce it**, because no
+hook can make somebody type `/clear`. So it is measured instead — the same move
+as `hook-integrity.sh`, which does not prevent a hook edit and instead turns it
+into a diff somebody sees. `session-log` records how each session began and
+what the gate was doing at the time, which makes the interesting ratio
+readable:
+
+| | |
+|---|---|
+| clears >> compacts | the lever is being pulled; a feature costs about one window per phase |
+| compacts >> clears | the window is filling before it is dropped — the whole conversation re-sent at cache-read price instead of discarded at zero |
+| compacts landing mid-`create` | that feature overran its window; the phase is too big, or the briefing was too thin |
+
+Neither log is read by any gate, and deleting either is safe. They are
+measurements, not state.
+
+#### When someone else works on the same repository
+
+The raw logs stay machine-local — they are per-run rows, and committing them
+would mean a conflict on nearly every push for a file nobody reads during a
+merge. What gets shared is the monthly **total**:
+
+```bash
+bash .claude/scripts/savings.sh --record      # this month
+bash .claude/scripts/savings.sh --record 2026-08
+```
+
+That writes one row to `docs/reports/savings/<you>.tsv` — **one file per
+developer**, named from your git identity, so two people never write the same
+path and the merge problem does not exist. Commit it. From then on `savings.sh`
+prints a per-developer table and a `PROJECT` total, and `/report` uses that
+instead of one laptop's numbers.
+
+Re-running `--record` for a month **replaces** that month's row rather than
+appending, so regenerating a report twice cannot double the project total.
+
+Solo, none of this happens: nothing is written until you ask, and the scope
+line says plainly that the figures are one machine's. The moment a second
+file appears, that caveat stops being printed — because it stops being true.
+The count is read from the directory, never assumed, which is the only reason
+it can be trusted to change.
+
+---
+
+## When *not* to run the pipeline
+
+The pipeline has a floor, and pretending otherwise is how it gets abandoned.
+`/feature` dispatches a subagent per phase plus the verify fan-out — on Max 20x
+that is ten to twelve fresh context windows. Against a one-line change, that is
+two orders of magnitude of overhead for a change that was never going to
+benefit from a plan.
+
+**Run `/feature` when** the change has a design question in it, touches more
+than one file, changes behaviour anyone could observe, or is a bug fix — bug
+fixes go through the pipeline no matter how small, because the failing test is
+the whole point.
+
+**Do not run it for** a typo in a string or comment, a log-level change, a
+version bump you already decided on, a formatting-only pass, or a revert.
+
+The gate still applies to all of those, and that is deliberate: it costs two
+commands, not two phases.
+
+```bash
+bash .claude/scripts/gate.sh test
+bash .claude/scripts/gate.sh create   --problem "Invoice export header said 'Totl'" --red "n/a: string literal, no behaviour to pin"
+# ... make the change ...
+bash .claude/scripts/gate.sh idle
+```
+
+`--problem` has a floor of twelve characters of content, not a sentence quota.
+It is cheap on purpose. What it buys is that the trivial change is still on the
+record, so `gate.sh log` can tell "a small change" from "a bypass nobody has
+found yet" — which is the one signal the log exists to protect.
+
+If you find yourself resenting the two commands, that is worth noticing rather
+than working around: it usually means the change is not as trivial as it
+looked, or that the gate is guarding a path that should not be guarded. Both
+are `PROFILE.md` conversations, not reasons to reach for a hook-skipping commit
+flag.
+
 ---
 
 ## DevSecOps coverage
@@ -708,6 +822,18 @@ improvement or a regression. On Max 20x this matters most: `/studio-report`
 compares against `docs/reports/baseline.md`, and with no baseline every saving
 it reports is invented.
 
+Record `savings.sh` in the same file, and record it **empty**:
+
+```bash
+bash .claude/scripts/savings.sh >> docs/reports/baseline.md
+```
+
+An empty filter log on day one is the useful reading, not a missing one. It is
+the zero that every later "the filter saved N bytes" is measured from, and it
+is also the check that the hooks are firing at all — a filter log still empty
+after a week of real work does not mean the filter saved nothing. It means the
+hook is not running, and `/hooks` is where to look.
+
 ---
 
 ## Recommended companions
@@ -805,10 +931,10 @@ improving the input.
 ## Updating
 
 ```bash
-cd ~/.claude-studio && git pull
-cd /path/to/project && ~/.claude-studio/install.sh --target . --force
-~/.claude-studio/configure.sh --target .
-~/.claude-studio/verify.sh --target .
+cd ~/.iptcvd-pipeline && git pull
+cd /path/to/project && ~/.iptcvd-pipeline/install.sh --target . --force
+~/.iptcvd-pipeline/configure.sh --target .
+~/.iptcvd-pipeline/verify.sh --target .
 ```
 
 With no `--plan`, the installer reuses the tier recorded in
@@ -821,14 +947,31 @@ a profile field, the installer names it and writes a fresh render alongside as
 `PROFILE.studio.md` rather than overwriting yours. To start the profile over,
 delete it and re-run.
 
-Always run `verify.sh` after an upgrade. Studio hooks fail **closed**: an
+Always run `verify.sh` after an upgrade. The hooks fail **closed**: an
 unconfigured `gate-check.sh` refuses source writes rather than waving them
 through, so a half-finished upgrade is loud instead of silent.
+
+### A note on the name
+
+This project was called `claude-studio` before it was IPTCVD Pipeline — the
+acronym is the pipeline itself, Idea · Plan · Test · Create · Verify · Document.
+The rename deliberately stopped at the surface. Everything you read or type
+changed; everything written **into your project** kept its old spelling:
+
+| Still named `studio` | Why |
+|---|---|
+| `.claude/state/studio.json` | renaming it makes every existing install read as uninstalled on the next `configure.sh` |
+| `CLAUDE.studio.md`, `PROFILE.studio.md` | files already sitting in people's repositories |
+| `/studio-report` | a command in muscle memory and in `docs/reports/` paths |
+| `<!-- studio:… -->` markers | the anchors `configure.sh` uses to rewrite a block idempotently |
+
+A cosmetic rename that breaks working installs is a bad trade. If you want the
+internals renamed too, that is a migration with a test, not a find-and-replace.
 
 ## Uninstalling
 
 ```bash
-~/.claude-studio/install.sh --target . --uninstall
+~/.iptcvd-pipeline/install.sh --target . --uninstall
 ```
 
 Removes `.claude/agents`, `skills`, `rules`, `hooks`, `state` and `workflows`
@@ -913,6 +1056,20 @@ Two rules of thumb regardless of tier:
 - `security.md`'s scope-boundary and resolver-pattern rules describe two
   *shapes* of authorisation bug, not a scanner. They tell a reviewing agent what
   to look for; they do not replace a real SAST or dependency tool.
+- Hook **order is not a thing you have.** Claude Code runs all matching hooks in
+  parallel and does not document which decision wins when one returns `deny`
+  and another `allow`. Nothing in this pipeline depends on an order; if you add
+  a `Bash` hook of your own that both rewrites commands *and* refuses some,
+  you are the one introducing the race, and `test/hooks.sh` §10b is the shape
+  of test that would catch it.
+- `savings.sh` reports **bytes** as measured and **tokens** as an estimate at
+  ~4 bytes/token. That ratio is a rule of thumb for prose and is optimistic for
+  test output, where stack traces, paths and punctuation tokenise worse. Quote
+  the byte columns; treat the token column as indicative.
+- `session-log` can tell a `/clear` from a compact. It cannot tell a *useful*
+  clear from a reflexive one, and it will not notice a session you should have
+  cleared and did not — only the ones that started. It is an instrument on the
+  lever, not a judge of how you pulled it.
 - Claude Code changes weekly. If a frontmatter field or command in here stops
   matching `code.claude.com/docs`, the docs win. Open an issue.
 

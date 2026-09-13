@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claude-studio integration test
+# IPTCVD Pipeline integration test
 #
 # qa.sh checks the templates. verify.sh checks one install. This exercises the
 # full lifecycle — install, configure, verify, upgrade, switch tier, uninstall
@@ -13,11 +13,15 @@
 #
 set -uo pipefail
 S="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-W="$(mktemp -d "${TMPDIR:-/tmp}/claude-studio-it.XXXXXX")"
+W="$(mktemp -d "${TMPDIR:-/tmp}/iptcvd-pipeline-it.XXXXXX")"
 trap 'rm -rf "$W"' EXIT
-P=0; F=0
+P=0; F=0; S_=0
 ok()  { printf '  \033[32mok  \033[0m %s\n' "$1"; P=$((P+1)); }
 no()  { printf '  \033[31mFAIL\033[0m %s\n' "$1"; F=$((F+1)); }
+# A case this PLATFORM cannot stage is not a case that failed, and reporting it
+# as red trains people to ignore a red. It is not a pass either, so it gets its
+# own colour, its own counter and a reason -- never a silent skip.
+skip(){ printf '  \033[33mSKIP\033[0m %s\n' "$1"; S_=$((S_+1)); }
 hd()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
 strip(){ sed 's/\x1b\[[0-9;]*m//g'; }
 
@@ -119,10 +123,65 @@ fi
 # ------------------------------------------------------------- degradation
 hd "E. Missing dependencies degrade, not crash"
 d="$W/nojq"; mk "$d" node
-FAKE=$(mktemp -d); for t in bash env sh git sed awk grep cat cp mkdir rm chmod date basename dirname find head tail tr sort uniq printf ls wc python3 diff mv touch rmdir; do
-  p=$(command -v $t 2>/dev/null) && ln -sf "$p" "$FAKE/$t"
-done
-if PATH="$FAKE" $S/install.sh --plan max --target "$d" >"$W/nojq.log" 2>&1; then
+
+# A PATH that has every tool the installer needs EXCEPT jq.
+#
+# The obvious construction -- a temp dir of links to each needed tool -- does
+# not survive Git Bash. Every msys binary resolves msys-2.0.dll relative to its
+# OWN location, so a relocated `dirname` or `date` dies with "error while
+# loading shared libraries" and the installer collapses for a reason that has
+# nothing to do with jq. That reported `no jq: install crashed` on every
+# Windows run: a harness failure wearing a product failure's clothes, in the
+# one suite layer whose entire job is telling those two apart.
+#
+# So SUBTRACT instead of rebuild: drop the directories that contain a jq from
+# the real PATH and leave every tool where it already lives. Nothing moves, so
+# nothing loses its libraries. Falls back to the copy sandbox where jq shares a
+# directory with tools the installer needs (the usual /usr/bin case).
+# A sandbox that never hid jq would pass this section without testing anything,
+# and one whose tools cannot start would fail it for the wrong reason.
+#
+# Both halves must RUN something. `command -v` only proves a file exists and
+# carries an executable bit -- which every relocated msys binary still does,
+# right up until it cannot find its DLL. Checking resolution rather than
+# execution is what let the copy sandbox below report itself healthy and then
+# collapse inside the installer.
+sandbox_ok() {
+  PATH="$1" "$BASH" -c 'command -v jq' >/dev/null 2>&1 && return 1
+  PATH="$1" "$BASH" -c 'git --version && date && dirname /a/b && sed --version && awk --version' \
+    >/dev/null 2>&1
+}
+
+sandbox_without_jq() {   # prints a PATH, or nothing if it could not build one
+  local d out="" fake p t
+
+  # 1. SUBTRACTION: drop the PATH entries that hold a jq, keep every tool where
+  #    it already lives. Nothing moves, so nothing loses its libraries.
+  local IFS=:
+  for d in $PATH; do
+    [ -n "$d" ] || continue
+    [ -x "$d/jq" ] || [ -x "$d/jq.exe" ] && continue
+    out="${out:+$out:}$d"
+  done
+  IFS=$' \t\n'
+  if [ -n "$out" ] && sandbox_ok "$out"; then printf '%s' "$out"; return; fi
+
+  # 2. COPY FALLBACK: for the usual Linux case where jq sits in /usr/bin next to
+  #    half the tools the installer needs, so subtracting it removes those too.
+  fake=$(mktemp -d)
+  for t in env sh git sed awk grep cat cp mkdir rm chmod date basename dirname \
+           find head tail tr sort uniq ls wc python3 diff mv touch rmdir; do
+    p=$(command -v "$t" 2>/dev/null) || continue
+    [ -f "$p" ] || continue                     # a builtin has no binary to stage
+    ln -sf "$p" "$fake/$t" 2>/dev/null || cp "$p" "$fake/$t" 2>/dev/null || true
+  done
+  sandbox_ok "$fake" && printf '%s' "$fake"
+}
+
+FAKE="$(sandbox_without_jq)"
+if [ -z "$FAKE" ]; then
+  skip "no jq: this platform cannot stage a working jq-free PATH (nothing was tested)"
+elif PATH="$FAKE" "$BASH" "$S/install.sh" --plan max --target "$d" >"$W/nojq.log" 2>&1; then
   grep -q 'jq not found' "$W/nojq.log" && ok "no jq: warns explicitly" || no "no jq: installed without warning"
   [ -f "$d/.claude/settings.json" ] && ok "no jq: settings.json still written" || no "no jq: no settings.json"
 else
@@ -253,5 +312,8 @@ python3 "$S/templates/skills/studio-report/scripts/tokens.py" 2099-01 "$W/rep" >
 for j in "$W/rep"/*.json; do jq empty "$j" 2>/dev/null || no "invalid JSON: $j"; done
 ok "all report JSON is valid"
 
-printf '\n\033[1m%d ok, %d failed\033[0m\n' "$P" "$F"
+printf '\n\033[1m%d ok, %d failed' "$P" "$F"
+[ "$S_" -gt 0 ] && printf ', %d skipped' "$S_"
+printf '\033[0m\n'
+[ "$S_" -gt 0 ] && printf '\033[33mSkipped cases could not be STAGED on this platform. They are not passes.\033[0m\n'
 [ "$F" -gt 0 ] && exit 1; exit 0

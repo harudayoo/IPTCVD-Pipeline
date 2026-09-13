@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# claude-studio installer
+# IPTCVD Pipeline installer
 #
 # Installs a plan-sized Claude Code pipeline into a project. Three tiers, all
 # built on the same enforcement layer:
@@ -42,7 +42,7 @@ die()    { c_red "error: $*" >&2; exit 1; }
 
 usage() {
   cat <<'HELPTEXT'
-claude-studio installer
+IPTCVD Pipeline installer
 
 USAGE
   ./install.sh [--plan pro|max|max20x] [OPTIONS]
@@ -187,12 +187,12 @@ choose_plan() {
 
 # ---------------------------------------------------------------- uninstall
 if [ "$UNINSTALL" = 1 ]; then
-  c_yel "Uninstalling claude-studio from $TARGET"
+  c_yel "Uninstalling IPTCVD Pipeline from $TARGET"
   PREV="$(installed_plan || true)"
 
   # Remove only what this tier installed. Blanket-removing .claude/skills and
   # .claude/agents would take third-party skills and agents with it — a design
-  # plugin, a house agent — which is not what "uninstall claude-studio" means.
+  # plugin, a house agent — which is not what "uninstall IPTCVD Pipeline" means.
   if [ -n "$PREV" ] && plan_is_valid "$PREV" && [ -f "$SRC/templates/tiers/$PREV/manifest.conf" ]; then
     c_dim "  installed tier: $PREV — removing only what it owned"
     # shellcheck source=/dev/null
@@ -215,7 +215,7 @@ if [ "$UNINSTALL" = 1 ]; then
       [ "$DRY_RUN" = 1 ] || rmdir "$TARGET/$d" 2>/dev/null || true
     done
     if [ -d "$TARGET/.claude/skills" ] || [ -d "$TARGET/.claude/agents" ]; then
-      c_yel "  Left in place (not installed by claude-studio):"
+      c_yel "  Left in place (not installed by IPTCVD Pipeline):"
       for d in agents skills rules; do
         [ -d "$TARGET/.claude/$d" ] || continue
         for f in "$TARGET/.claude/$d/"*; do
@@ -380,7 +380,7 @@ detect_stack() {
 
 # ------------------------------------------------------------------- start
 echo
-c_grn "claude-studio v$VERSION  ·  $TIER_NAME plan"
+c_grn "IPTCVD Pipeline v$VERSION  ·  $TIER_NAME plan"
 c_dim "$TIER_TAGLINE"
 c_dim "source: $SRC"
 c_dim "target: $TARGET"
@@ -620,8 +620,18 @@ else
 fi
 
 c_grn "7. .gitignore"
+# gate-log.tsv is deliberately NOT here: it is the compliance record, it answers
+# "was the pipeline followed", and that answer belongs to the repository.
+#
+# The two measurement logs are the opposite case. They are append-only, they are
+# written on every test run and every session start, and they are per-machine --
+# so committing them means a conflict on essentially every push, in a file
+# nobody reads during a merge. That is how a hook gets deleted, which costs more
+# than the aggregate would have been worth. No gate reads either one.
 if [ "$DRY_RUN" = 0 ]; then
-  for line in "CLAUDE.local.md" ".claude/settings.local.json" ".claude/.backup-*" ".claude/agent-memory-local/"; do
+  for line in "CLAUDE.local.md" ".claude/settings.local.json" ".claude/.backup-*" \
+              ".claude/agent-memory-local/" ".claude/state/filter-log.tsv" \
+              ".claude/state/session-log.tsv"; do
     grep -qxF "$line" "$TARGET/.gitignore" 2>/dev/null || echo "$line" >> "$TARGET/.gitignore"
   done
 fi

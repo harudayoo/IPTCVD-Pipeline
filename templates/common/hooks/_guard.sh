@@ -14,7 +14,7 @@
 studio_guard() {
   local self="$1"
   if grep -q '{{[A-Z_]*}}' "$self" 2>/dev/null; then
-    echo "claude-studio: $(basename "$self") has unresolved placeholders." >&2
+    echo "iptcvd-pipeline: $(basename "$self") has unresolved placeholders." >&2
     echo "  Fill docs/setup/PROFILE.md, then run ./configure.sh" >&2
     return 1
   fi
