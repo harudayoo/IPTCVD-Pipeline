@@ -14,7 +14,7 @@ the verification fan-out and the token budget that plan can actually afford:
 | **Max** | 11 | 9 | 6 | 3 parallel, read-only | + proposal & judge | monthly `/report` |
 | **Max 20x** | 24 | 14 | 7 | 5 parallel, read-only | + agent teams / workflows | `/studio-report` on OTel |
 
-All three share the same enforcement layer: six hooks, path-scoped rules, a
+All three share the same enforcement layer: seven hooks, path-scoped rules, a
 committed gate file that carries the plan's *content*, and agent memory in
 version control. The tiers differ in how many specialists exist and how wide the
 verification fan-out is — never in how strict the gates are.
@@ -387,26 +387,30 @@ scan work, **sonnet** for building, **opus** for irreversible decisions and
 adversarial reasoning. The installer prints which agents are on Opus, because
 that is where the cost is.
 
-### The six hooks — identical on every tier
+### The seven hooks — identical on every tier
 
 | Hook | Event | Behaviour on misconfiguration |
 |---|---|---|
 | `gate-check` | PreToolUse (Edit/Write) | **Fails closed** for protected source, open for everything else |
 | `bash-gate` | PreToolUse (Bash) | **Fails closed** for a parse failure naming a guarded root; open otherwise |
 | `filter-output` | PreToolUse (Bash) | Fails open — a broken filter must never block work |
+| `bash-audit` | PreToolUse + PostToolUse (Bash) | Fails open — the backstop, never the only lock |
 | `post-edit` | PostToolUse (Edit/Write) | Fails open |
 | `doc-check` | Stop | Fails open |
 | `session-log` | SessionStart | Fails open — a recorder that can block a session start is one you delete |
 
-Five of those guard. The sixth only counts, and it is the newest thing here
-because of an argument this repo lost with itself: the two largest token levers
-in the pipeline were asserted in prose and measured by nothing, which is the
-same defect as an 800-line rule that thirteen files quietly ignore. `bash-gate`
-is listed above `filter-output` in `settings.json` and that is **not** an
-execution order — Claude Code runs all matching hooks in parallel and does not
-document which decision wins when one returns `deny` and another `allow`.
-Nothing here depends on it. The two are safe together because their domains do
-not overlap, which is a property, and `test/hooks.sh` §10b tests it.
+Six of those guard. `session-log` only counts, and it was the newest thing
+here for one release because of an argument this repo lost with itself: the
+two largest token levers in the pipeline were asserted in prose and measured
+by nothing, which is the same defect as an 800-line rule that thirteen files
+quietly ignore. `bash-gate` is listed above `filter-output` in `settings.json`
+and that is **not** an execution order — Claude Code runs all matching hooks
+in parallel. The docs used to say precedence between them was undocumented;
+it turns out not to be — exit 2, or a hook's own `permissionDecision: "deny"`,
+beats any other hook's `"allow"` in the same batch, and no hook `"allow"` ever
+overrides a `permissions.deny` rule (see DESIGN-RATIONALE.md §10.8). Nothing
+here depends on that anyway: the two are safe together because their domains
+do not overlap, which is a property, and `test/hooks.sh` §10b tests it.
 
 `bash-gate` is the other door. `gate-check` is registered on `Edit|Write`, so
 without it the entire pipeline is one `sed -i` away from irrelevant — and an
@@ -434,6 +438,21 @@ sed -i 's/x/y/' src/app.ts   # .claude/hooks/
 It was also unnecessary: the scripts are invoked as `bash .claude/scripts/…`,
 and `bash` is not a program the hook extracts targets from. The safest allowlist
 is the one you can delete. Both forms are in `test/hooks.sh`.
+
+`bash-audit` is `bash-gate`'s backstop, not a second copy of it. `bash-gate` is
+a parser and will always miss a shape — a script invoked by path, a wrapper it
+has not been taught. `bash-audit` does not try to recognise the command at
+all: registered on both `PreToolUse(Bash)` and `PostToolUse(Bash)`, it
+snapshots which guarded files are dirty (as `path<TAB>git-hash-object`, not
+just a path — a second write to an *already*-dirty file has to move the hash,
+or a `find -newer`-style stamp would have caught it and this would not) before
+the command runs and after, and refuses whatever changed, whatever produced
+it. It cannot undo the write — `PostToolUse` runs after the command already
+ran — so it names the file and tells the model to `git checkout --` it or
+open the gate properly. Measured against a synthetic 6,000-file source tree on
+Windows: the pre/post pair costs under a second combined, against roughly
+1.4s for the `find -newer` design this replaced, over the same tree, for a
+single call. Full numbers in DESIGN-RATIONALE.md §10.6.
 
 `filter-output` is the largest token saving here: it rewrites test and build
 commands so only failures return to the model, turning tens of thousands of

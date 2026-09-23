@@ -35,7 +35,11 @@
 #                                step toward editing it without detection
 #
 # Not covered, and honest about it: a write performed by a script invoked by
-# path, or inside an editor session. Those remain the Edit/Write tools' job.
+# path, or by a wrapper this parser has not been taught. bash-audit.sh is the
+# backstop for exactly that gap -- it does not parse the command at all, it
+# diffs which guarded files are dirty before and after the call and refuses
+# whatever is new, so a shape this file misses is still caught, just one step
+# later and without the pre-emptive block.
 set -uo pipefail
 SELF="${BASH_SOURCE[0]}"
 HOOKDIR="$(cd "$(dirname "$SELF")" && pwd)"

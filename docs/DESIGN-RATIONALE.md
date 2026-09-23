@@ -10,7 +10,7 @@ date: "August 2026"
 > nine" plus `qa-runner` and `security-auditor`; `--plan pro` builds the smaller
 > 7-agent pipeline documented in [`SETUP-SPEC.md`](SETUP-SPEC.md).
 >
-> Every tier shares §10's six hooks, §5's memory architecture, and §2's gate
+> Every tier shares §10's seven hooks, §5's memory architecture, and §2's gate
 > discipline unchanged. The tiers differ in roster size and verification
 > fan-out, not in how strict the gates are. Read §0.2, §11 and §14 before
 > choosing a tier — the honest constraints, the token economics and the
@@ -1037,7 +1037,7 @@ Then run the polish sequence in order — design, craft, accessibility, performa
 
 # 10. Enforcement: hooks and permissions
 
-Prompts are advisory; hooks are deterministic. These six hooks are what turn a set of nicely-worded agent prompts into an actual process. Four of them were the original design; §10.5 exists because that design had a door in it, and §10.6 because two of its load-bearing claims about token spend were measured by nothing.
+Prompts are advisory; hooks are deterministic. These seven hooks are what turn a set of nicely-worded agent prompts into an actual process. Four of them were the original design; §10.5 exists because that design had a door in it, §10.6 because §10.5 is a parser and a parser always misses a shape eventually, and §10.7 because two of the design's load-bearing claims about token spend were measured by nothing.
 
 ## 10.1 Hook 1 — the phase gate
 
@@ -1152,7 +1152,45 @@ sed -i 's/x/y/' src/app.ts   # .claude/hooks/
 
 It is also unnecessary: the scripts are invoked as `bash .claude/scripts/…`, and `bash` is not a program the hook extracts targets from. The safest allowlist is the one you can delete.
 
-## 10.6 Hook 6 — the one that only counts
+## 10.6 Hook 6 — the backstop
+
+§10.5 is a parser, and a parser will always miss a shape eventually: a script invoked by path (`bash w.sh`, where `w.sh` contains the actual write), a wrapper this repo has not been taught, tomorrow's tool. The README says so plainly rather than pretending the parser is complete. This hook does not try to extend the parser. It stops parsing the command at all.
+
+Registered on both `PreToolUse(Bash)` and `PostToolUse(Bash)` — the same script, told which half it is by a trailing argument in `settings.json` (`bash-audit.sh pre` / `bash-audit.sh post`), with a fallback that reads `hook_event_name` from the payload for a build that does not pass the argument through. `pre` snapshots which guarded files are dirty; `post` takes the same snapshot again and refuses whatever is now dirty that was not dirty (or was dirty with different CONTENT) before.
+
+```bash
+#!/usr/bin/env bash
+# .claude/hooks/bash-audit.sh — diffs dirty files across a Bash call, not a parse
+snapshot() {  # path<TAB>content-hash, over the guarded roots and manifests only
+  { git diff --name-only HEAD -- $ROOTS $MANIFESTS
+    git ls-files -o --exclude-standard -- $ROOTS $MANIFESTS
+  } | sort -u | while read -r f; do printf '%s\t%s\n' "$f" "$(git hash-object -- "$f")"; done
+}
+[ "$1" = pre ]  && { snapshot > .claude/state/.bash-audit-pre.tsv; exit 0; }
+[ "$PHASE" = create ] && exit 0
+comm -13 <(cat .claude/state/.bash-audit-pre.tsv) <(snapshot) | cut -f1 | sort -u
+# non-empty output above → BLOCKED, logged, and the model is told to
+# `git checkout --` the file(s) or open the gate properly
+```
+
+**Why a content hash, not just a dirty path.** The first draft of this hook compared a plain before/after SET of dirty paths, and that shape has a real gap: a file already dirty from a PRIOR Bash call — the model has not reverted it yet, or ignored the first `BLOCKED` message — stays dirty without changing STATE, so a second write to it during a later call shows identically in both snapshots and is never flagged. The design this hook replaces (`find <roots> -newer <stamp>`) did not have that gap, because it re-touched its stamp fresh on every single call; matching that per-call precision, not merely "eventually notices a write happened," is the actual bar. Recording `git hash-object` per already-dirty path closes it: the hash moves on any content change, whether the path was already in the dirty set or not, and `git hash-object` only runs over the (normally small) currently-dirty set — never the whole tree — so it stays cheap regardless of repository size. This was caught and fixed in review, not shipped and found later; worth naming so the next person extending this hook does not reach for the cheaper, wrong version again.
+
+**Measured, not assumed.** The handoff's own design called for `find <roots> -newer <stamp>` and asked for a real number before trusting it on Windows. Measured against a synthetic 6,000-file source tree (Git Bash, Windows 11 — this hook's actual runtime, not a Linux CI box):
+
+| Approach | Cost |
+|---|---|
+| `find src -newer .stamp -type f` | ~1.4s (mostly `sys` time — MSYS's `stat()` path is expensive per file) |
+| `git ls-files -m -o --exclude-standard` over the same tree | ~0.35s |
+| This hook's actual `pre` call (snapshot, nothing dirty) | ~0.37s |
+| This hook's actual `post` call (snapshot + `hash-object` + diff) | ~0.51s idle, ~0.54s with 3 dirty files |
+
+Both `find` and the git-based approaches scan the SAME roots on every single Bash call, not only on Edit/Write, so the difference compounds fastest here of anywhere in this design — git wins outright, not merely as a fallback, which is why this hook never touches mtime at all. The combined pre+post cost (under a second on the worst case measured) is still real per-call latency and is disclosed as exactly that, not rounded down to "negligible."
+
+**Residual gap, named rather than hidden.** A write that restores the exact original bytes of a file before the `post` snapshot runs — erasing its own evidence — leaves the hash unchanged and is invisible here. That shape has no legitimate reason to occur and is far more elaborate than any bypass this repo has measured; accepted as out of scope, the same call the original `find -newer` design made about `touch -r`.
+
+**It cannot un-happen the write.** `PostToolUse` fires after the command already ran, so this hook can only report and ask for a revert (`git checkout -- <files>`) or a properly-opened gate — it is a backstop for visibility, and §10.5 remains the pre-emptive door for every shape it can already parse.
+
+## 10.7 Hook 7 — the one that only counts
 
 The preceding hooks all guard something. This one guards nothing, and it exists because of an argument this design lost with itself.
 
@@ -1178,7 +1216,7 @@ Two rules keep this from becoming a liability of its own:
 1. **No gate reads either log.** The moment a gate depends on a measurement, the measurement acquires an incentive and stops being one.
 2. **Bytes are measured; tokens are estimated.** The logs record bytes because bytes are what a shell can count without a tokeniser. The ~4 bytes/token conversion is a prose rule of thumb and is optimistic for test output. Label it every time, or it becomes the confident wrong number §2 warns about — and a number nobody re-derives later is exactly how a floor gets set wrong.
 
-## 10.7 Wiring it up
+## 10.8 Wiring it up
 
 ```json
 // .claude/settings.json
@@ -1233,7 +1271,7 @@ Listing `bash-gate` above `filter-output` reads like an ordering, and it is not 
 
 A note on permission modes: `bypassPermissions` defeats most of this. Use `acceptEdits` or `auto` for flow; keep `bypassPermissions` for throwaway sandboxes only.
 
-## 10.8 Two behaviors this design assumed, checked against the docs
+## 10.9 Two behaviors this design assumed, checked against the docs
 
 The gate-hardening audit (commit `f4917a6`) named two things this whole enforcement layer leans on without ever having confirmed them against Claude Code's actual documented behavior. Checked 2026-09-23 against `code.claude.com/docs/en/hooks` and `code.claude.com/docs/en/permissions`.
 
@@ -1247,7 +1285,7 @@ That resolves the same-hook case (a hook's own stderr-exit-2 beats its own JSON)
 
 > "Hook decisions don't bypass permission rules. Claude Code evaluates deny and ask rules regardless of what a PreToolUse hook returns: a matching deny rule blocks the call, and a matching ask rule still prompts even when the hook returned `"allow"` or `"ask"`. This preserves the deny-first precedence described in Manage permissions, including deny rules set in managed settings."
 
-Reading the two together: a block (exit 2, or a hook-issued `permissionDecision: "deny"`) is a veto that no other hook's `"allow"` in the same batch can undo, and neither can a hook override `permissions.deny`. So the original §10.7 claim — "does not document which decision wins" — was wrong; it does, and blocking wins. This is a stronger guarantee than §5 (slice 5 of the audit) needs, but the fix there stands anyway: `filter-output` rewriting `updatedInput` on a compound command it never inspected is still the wrong behavior in isolation — a passing `bash-gate` (because the write target sits outside every guarded root, e.g. `git push --force`) plus an "allow" from `filter-output` is a call that proceeds, filtered, with no gate ever having looked at the non-write part of the command. The precedence finding removes one failure mode (a `filter-output` allow can never *resurrect* a call `bash-gate` blocked); it does not remove the one slice 5 actually fixes (a compound command `bash-gate` never flagged in the first place, because none of its segments write to a guarded root, sailing through `filter-output`'s prefix match unexamined).
+Reading the two together: a block (exit 2, or a hook-issued `permissionDecision: "deny"`) is a veto that no other hook's `"allow"` in the same batch can undo, and neither can a hook override `permissions.deny`. So the original §10.8 claim — "does not document which decision wins" — was wrong; it does, and blocking wins. This is a stronger guarantee than §5 (slice 5 of the audit) needs, but the fix there stands anyway: `filter-output` rewriting `updatedInput` on a compound command it never inspected is still the wrong behavior in isolation — a passing `bash-gate` (because the write target sits outside every guarded root, e.g. `git push --force`) plus an "allow" from `filter-output` is a call that proceeds, filtered, with no gate ever having looked at the non-write part of the command. The precedence finding removes one failure mode (a `filter-output` allow can never *resurrect* a call `bash-gate` blocked); it does not remove the one slice 5 actually fixes (a compound command `bash-gate` never flagged in the first place, because none of its segments write to a guarded root, sailing through `filter-output`'s prefix match unexamined).
 
 **2. Are hook scripts and their registration live, or snapshotted at session start?**
 
@@ -1629,7 +1667,7 @@ Run this once. It gets your app running from a clean environment, captures the i
 
 ## Phase 5 — Enforcement (Day 4, 2 hours)
 
-Write the six hooks from §10, `chmod +x .claude/hooks/*.sh`, wire `settings.json`, then **test each one deliberately**:
+Write the seven hooks from §10, `chmod +x .claude/hooks/*.sh`, wire `settings.json`, then **test each one deliberately**:
 
 ```
 # Should be blocked (gate is not in 'create')
@@ -1800,7 +1838,7 @@ Every discipline you listed, and where it lives in the system.
 
 **It will not:** replace your judgement at the gates. Every gate in this design ends with you approving something. That is deliberate — the gates are where a bad plan gets caught cheaply, and an approval you rubber-stamp is a gate that does not exist. The moment you approve without reading, the pipeline degrades into an expensive way to generate confident-looking output.
 
-**Start small.** Nine agents, six hooks, six skills, two MCP servers, one pilot feature. Everything in this document beyond that is an optimisation you should only add once you can point at the specific problem it solves.
+**Start small.** Nine agents, seven hooks, six skills, two MCP servers, one pilot feature. Everything in this document beyond that is an optimisation you should only add once you can point at the specific problem it solves.
 
 ---
 

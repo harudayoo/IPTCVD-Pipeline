@@ -42,7 +42,7 @@ mkdir -p "$WORK/.claude/hooks" "$WORK/.claude/state" "$WORK/.claude/scripts" \
          "$WORK/src/services" "$WORK/src/components" "$WORK/src/http" \
          "$WORK/docs/specs" "$WORK/tests"
 
-for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post-edit.sh session-log.sh; do
+for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post-edit.sh session-log.sh bash-audit.sh; do
   [ -f "$SRC/templates/common/hooks/$h" ] || continue
   sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
       -e 's|{{TEST_ROOT}}|tests|g' \
@@ -588,6 +588,58 @@ g "main gate open does not open worktree" "$WORK/.worktrees/feat/src/services/du
 head_ "12f. verify phase is read-only for source"
 set_gate '{"phase":"verify","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
 g "source edit in verify blocks"         "src/services/dues.ts"               2
+
+head_ "12g. bash-audit · the backstop for a write no parser can see"
+# A script invoked BY PATH is exactly the shape bash-gate.sh cannot see: the
+# write happens inside w.sh, never named in the command bash-gate parses.
+set_gate '{"phase":"idle"}'
+rm -f .claude/state/.bash-audit-pre.tsv .claude/state/gate-log.tsv
+printf 'echo x > src/services/brandnew-audit.ts\n' > w.sh
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1
+bash w.sh
+OUT=$(bash .claude/hooks/bash-audit.sh post </dev/null 2>&1); RC=$?
+[ "$RC" = 2 ] && pass "a script-invoked write with the gate closed is caught" \
+              || fail "a script-invoked write with the gate closed is caught" "exit 2" "exit $RC"
+case "$OUT" in
+  *brandnew-audit.ts*) pass "it names the file that changed" ;;
+  *) fail "it names the file that changed" "brandnew-audit.ts" "$OUT" ;;
+esac
+grep -q "BYPASS" .claude/state/gate-log.tsv 2>/dev/null \
+  && pass "the bypass is recorded to gate-log.tsv" \
+  || fail "the bypass is recorded to gate-log.tsv" "a BYPASS row" "none"
+rm -f src/services/brandnew-audit.ts w.sh
+
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1
+OUT=$(bash .claude/hooks/bash-audit.sh post </dev/null 2>&1); RC=$?
+[ "$RC" = 0 ] && pass "nothing dirty: stays silent" || fail "nothing dirty: stays silent" "exit 0" "exit $RC"
+
+set_gate '{"phase":"create","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1
+printf 'echo x > src/services/duringcreate.ts\n' > w2.sh
+bash w2.sh
+OUT=$(bash .claude/hooks/bash-audit.sh post </dev/null 2>&1); RC=$?
+[ "$RC" = 0 ] && pass "a write during 'create' is not blocked" \
+              || fail "a write during 'create' is not blocked" "exit 0" "exit $RC"
+rm -f src/services/duringcreate.ts w2.sh
+
+# The SAME already-dirty file, written AGAIN on a LATER call, must still be
+# caught. A plain before/after set of dirty PATHS would miss this -- the path
+# is dirty in both snapshots and never changes state -- which is the gap the
+# first draft of this hook had and this repo caught in review before shipping
+# it. Tracking a content hash per path is what catches the second write.
+set_gate '{"phase":"idle"}'
+printf 'echo first > src/services/already-dirty.ts\n' > w3.sh
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1
+bash w3.sh
+bash .claude/hooks/bash-audit.sh post </dev/null >/dev/null 2>&1   # first call: caught and logged; not the assertion under test
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1    # a NEW call begins; the file is ALREADY dirty
+printf 'echo second >> src/services/already-dirty.ts\n' > w3.sh
+bash w3.sh
+OUT=$(bash .claude/hooks/bash-audit.sh post </dev/null 2>&1); RC=$?
+[ "$RC" = 2 ] && pass "a second write to an already-dirty file is still caught" \
+              || fail "a second write to an already-dirty file is still caught" "exit 2" "exit $RC"
+rm -f src/services/already-dirty.ts w3.sh
+rm -f .claude/state/.bash-audit-pre.tsv .claude/state/gate-log.tsv
 
 # ------------------------------------------------------------ 13. gate.sh CLI
 head_ "13. gate.sh refuses an answer that is not an answer"

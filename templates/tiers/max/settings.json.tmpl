@@ -22,16 +22,20 @@
     "PreToolUse": [
       { "matcher": "Edit|Write",
         "hooks": [{ "type": "command", "command": ".claude/hooks/gate-check.sh" }] },
-      { "_comment": "Without bash-gate the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write. This list is NOT an execution order: Claude Code runs all matching hooks in parallel. Docs confirm (see DESIGN-RATIONALE.md §10.8) that a block always wins -- exit 2, or a hook’s own permissionDecision deny, cannot be overridden by another hook’s allow in the same batch, and no hook allow overrides a permissions.deny rule either. Nothing here depends on that anyway: the two are safe together because their domains are disjoint -- filter-output rewrites only the four profile commands, none of which yields a write target for bash-gate to refuse -- which is a property, and test/hooks.sh section 10b tests it.",
+      { "_comment": "Without bash-gate the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write. This list is NOT an execution order: Claude Code runs all matching hooks in parallel. Docs confirm (see DESIGN-RATIONALE.md §10.9) that a block always wins -- exit 2, or a hook’s own permissionDecision deny, cannot be overridden by another hook’s allow in the same batch, and no hook allow overrides a permissions.deny rule either. Nothing here depends on that anyway: the two are safe together because their domains are disjoint -- filter-output rewrites only the four profile commands, none of which yields a write target for bash-gate to refuse -- which is a property, and test/hooks.sh section 10b tests it.",
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": ".claude/hooks/bash-gate.sh" },
-          { "type": "command", "command": ".claude/hooks/filter-output.sh" }
+          { "type": "command", "command": ".claude/hooks/filter-output.sh" },
+          { "type": "command", "command": ".claude/hooks/bash-audit.sh pre" }
         ] }
     ],
     "PostToolUse": [
       { "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": ".claude/hooks/post-edit.sh" }] }
+        "hooks": [{ "type": "command", "command": ".claude/hooks/post-edit.sh" }] },
+      { "_comment": "bash-gate.sh is a parser and will always miss a shape -- a script invoked by path, a wrapper it has not been taught. This is the backstop: it snapshots which guarded files are dirty before and after the Bash call and refuses to let a NEW one through, whatever produced it. Cannot undo the write (PostToolUse runs after), so it names the file(s) and tells the model to revert or open the gate.",
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/bash-audit.sh post" }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": ".claude/hooks/doc-check.sh" }] }
