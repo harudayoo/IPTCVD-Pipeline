@@ -98,20 +98,32 @@ mutate gate-empty-problem test/hooks.sh \
   '    MISSING="$MISSING"' \
   'the gate opens with no problem stated at all'
 
-# A one-token answer is the box-tick the phase gate replaced.
+# A one-token answer is the box-tick the phase gate replaced. The floor moved
+# to _guard.sh's studio_validate_notes (slice 2 of the f4917a6 audit: gate.sh
+# and gate-check.sh each had their own copy of this floor, and a hand-written
+# gate.json went through the copy that only checked for a non-empty string).
+# Anchored on the PROBLEM check specifically via the two lines together --
+# `if [ ${#dense} -lt 12 ]; then` alone now appears three times in that
+# function (problem, red, and the reuse/deps loop), and the preceding
+# `dense="${problem...` line is what makes this occurrence unique.
 mutate gate-keystroke-answer test/hooks.sh \
-  templates/common/scripts/gate.sh \
-  'if [ ${#P_C} -lt 12 ]; then' \
-  'if [ ${#P_C} -lt 0 ]; then' \
+  templates/common/hooks/_guard.sh \
+  '  dense="${problem//[[:space:]]/}"
+  if [ ${#dense} -lt 12 ]; then' \
+  '  dense="${problem//[[:space:]]/}"
+  if [ ${#dense} -lt 0 ]; then' \
   'a single keystroke passes as the IDEA phase'
 
 section "2. The second door"
 
 # Shipped: gate-check registered on Edit|Write only, so `sed -i`, `cat >`, `cp`
-# and every package manager walked past it.
+# and every package manager walked past it. Anchored on the quoted, full-path
+# form: a bare "bash-gate.sh" stopped being unique once the PostToolUse
+# bash-audit.sh entry (slice 3 of the f4917a6 audit) added a second mention of
+# it in a comment explaining the two hooks' relationship.
 mutate bashgate-unregistered qa.sh \
   templates/tiers/pro/settings.json.tmpl \
-  'bash-gate.sh' 'bash-gate-disabled.sh' \
+  '".claude/hooks/bash-gate.sh"' '".claude/hooks/bash-gate-disabled.sh"' \
   'the shell door is not registered on Bash'
 
 mutate bashgate-ignores-sed test/hooks.sh \
@@ -208,8 +220,8 @@ mutate readme-count-drift qa.sh \
 # A reader who counts four goes looking for four and finds four.
 mutate hook-count-drift qa.sh \
   docs/DESIGN-RATIONALE.md \
+  "Every tier shares §10's seven hooks" \
   "Every tier shares §10's six hooks" \
-  "Every tier shares §10's five hooks" \
   'the docs name a hook count the shipped hooks contradict'
 
 # The count can stay honest while a hook sits inert: five files in
@@ -232,10 +244,14 @@ mutate hook-never-registered qa.sh \
 # of a defect this repo already shipped once: a newline guard collapsed to `**`
 # and matched everything, and eight refusal cases reported PASS while the guard
 # rejected every valid value. Two bugs cancelling to green.
+# The vocabulary moved to _guard.sh's STUDIO_ASSERTION_PATTERN (slice 4 of the
+# f4917a6 audit: gate.sh's `test --red-cmd` needed the identical "does this
+# look like a real failure" judgment filter-output.sh already made, so the
+# pattern is declared once and both consume it). The mutation follows it there.
 mutate filter-stops-filtering test/hooks.sh \
-  templates/common/hooks/filter-output.sh \
-  "-B2 -A8 -E '(FAIL" \
-  "-B2 -A8 -E '(|FAIL" \
+  templates/common/hooks/_guard.sh \
+  "STUDIO_ASSERTION_PATTERN='(FAIL" \
+  "STUDIO_ASSERTION_PATTERN='(|FAIL" \
   'the output filter matches every line and returns the whole run'
 
 # The 150-line cap is the second limiter and binds only when grep itself

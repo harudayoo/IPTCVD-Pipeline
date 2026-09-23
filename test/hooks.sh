@@ -54,9 +54,12 @@ for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post
       -e 's|{{FORMAT_COMMAND}}|prettier -w|g' \
       -e 's|{{FORMAT_GLOB}}|*.ts|g' \
       -e 's|{{TYPECHECK_GLOB}}|*.ts|g' \
+      -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
       "$SRC/templates/common/hooks/$h" > "$WORK/.claude/hooks/$h"
 done
-cp "$SRC/templates/common/scripts/gate.sh" "$SRC/templates/common/scripts/savings.sh" "$SRC/templates/common/scripts/hook-integrity.sh" "$WORK/.claude/scripts/" 2>/dev/null || true
+sed -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
+    "$SRC/templates/common/scripts/gate.sh" > "$WORK/.claude/scripts/gate.sh"
+cp "$SRC/templates/common/scripts/savings.sh" "$SRC/templates/common/scripts/hook-integrity.sh" "$WORK/.claude/scripts/" 2>/dev/null || true
 chmod +x "$WORK/.claude/hooks/"*.sh "$WORK/.claude/scripts/"*.sh 2>/dev/null || true
 
 : > "$WORK/src/services/dues.ts"
@@ -125,6 +128,10 @@ g "a test beside its source"    "src/services/dues.test.ts"       0
 g "a Go test beside its source" "src/services/pay_test.go"        0
 g "a spec beside its source"    "src/components/Btn.spec.tsx"     0
 g "a python test_ prefix"       "src/services/test_dues.py"       0
+# .NET's OTHER common suffix convention (xUnit/NUnit projects commonly use
+# FooTests.cs; only *.Tests.cs, the dotted form, was recognised before).
+g "a .NET FooTests.cs"          "src/services/DuesTests.cs"       0
+g "a .NET FooTest.cs"           "src/services/DuesTest.cs"        0
 
 head_ "2b. gate-check · an UNCONFIGURED install still blocks, but stays repairable"
 # Both directions matter. An unsubstituted source-root regex matches nothing,
@@ -496,6 +503,7 @@ fi
 sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
     -e 's|{{TEST_ROOT}}|tests|g' \
     -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
+    -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
     "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check.sh
 bash .claude/scripts/hook-integrity.sh --update >/dev/null 2>&1
 
@@ -888,6 +896,31 @@ grep -q "$(printf 'gate.sh\tOPEN\tcreate\t-\tred-manual')" .claude/state/gate-lo
   && pass "logs red-manual for a typed sentence with no record behind it" \
   || fail "logs red-manual for a typed sentence with no record behind it" "a red-manual OPEN row" "$(grep OPEN .claude/state/gate-log.tsv 2>/dev/null | tail -1)"
 bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+
+head_ "17. Extra test patterns: a profile-declared convention this repo does not know"
+set_gate '{"phase":"idle"}'
+# A convention outside the built-in list -- Ruby's *_spec.rb -- blocks like any
+# other source file until the profile names it.
+g "an unrecognised convention still blocks" "src/services/dues_spec.rb" 2
+
+# Substitute EXTRA_TEST_PATTERNS as configure.sh would from a profile declaring
+# "Extra test patterns: *_spec.rb" -- a SEPARATE copy of gate-check.sh, so the
+# main fixture (used by every other section) is unaffected.
+sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
+    -e 's|{{TEST_ROOT}}|tests|g' \
+    -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
+    -e 's|{{EXTRA_TEST_PATTERNS}}|\|*_spec.rb|g' \
+    "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check-extra.sh
+EXTRA_G() {  # EXTRA_G <label> <path> <want-exit>
+  local label="$1" path="$2" want="$3" got
+  printf '{"tool_input":{"file_path":"%s"}}' "$(esc_json "$path")" \
+    | bash .claude/hooks/gate-check-extra.sh >/dev/null 2>&1
+  got=$?
+  [ "$got" = "$want" ] && pass "$label" || fail "$label" "exit $want" "exit $got"
+}
+EXTRA_G "a declared extra pattern is allowed"        "src/services/dues_spec.rb" 0
+EXTRA_G "an unrelated file is still guarded"         "src/services/dues.rb"      2
+rm -f .claude/hooks/gate-check-extra.sh
 
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && { printf 'A guard that fails its own bypass suite is not a guard.\n'; exit 1; }

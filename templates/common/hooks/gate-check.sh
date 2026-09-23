@@ -215,7 +215,7 @@ fi
 # `pay_test.go` are tests; `LatestReport.ts` and `InspectorController.ts` are
 # not, and both still block.
 case "${FILE##*/}" in
-  *.test.*|*.spec.*|*_test.*|test_*|*Test.php|*Spec.php|*.Tests.cs|conftest.py) exit 0 ;;
+  *.test.*|*.spec.*|*_test.*|test_*|*Test.php|*Spec.php|*.Tests.cs|*Tests.cs|*Test.cs|conftest.py{{EXTRA_TEST_PATTERNS}}) exit 0 ;;
 esac
 
 if ! studio_guard "$SELF"; then

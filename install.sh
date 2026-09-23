@@ -270,6 +270,7 @@ detect_stack() {
   SOURCE_ROOTS="NEEDS_REVIEW"; FRONTEND_ROOT="NEEDS_REVIEW"; TEST_ROOT="NEEDS_REVIEW"
   TOKEN_FILE="NEEDS_REVIEW"; AUDIT_CMD="NEEDS_REVIEW"
   SHARED_SURFACES=""
+  EXTRA_TEST_PATTERNS_RAW=""
 
   if [ -f "$TARGET/composer.json" ]; then
     STACK="PHP"; PKG="composer"
@@ -527,6 +528,7 @@ render() {  # render <template> <destination>
     -e "s|{{BUILD_COMMAND}}|$(esc_repl "$BUILD_CMD")|g" \
     -e "s|{{DEPENDENCY_AUDIT_COMMAND}}|$(esc_repl "$AUDIT_CMD")|g" \
     -e "s|{{SHARED_SURFACES}}|$(esc_repl "$SHARED_SURFACES")|g" \
+    -e "s|{{EXTRA_TEST_PATTERNS_RAW}}|$(esc_repl "$EXTRA_TEST_PATTERNS_RAW")|g" \
     -e "s|{{SOURCE_ROOTS}}|$(esc_repl "$SOURCE_ROOTS")|g" \
     -e "s|{{FRONTEND_ROOT}}|$(esc_repl "$FRONTEND_ROOT")|g" \
     -e "s|{{TEST_ROOT}}|$(esc_repl "$TEST_ROOT")|g" \

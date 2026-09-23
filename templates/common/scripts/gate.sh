@@ -181,7 +181,7 @@ case "$CMD" in
       while IFS= read -r rf; do
         [ -n "$rf" ] || continue
         case "${rf##*/}" in
-          *.test.*|*.spec.*|*_test.*|test_*|*Test.php|*Spec.php|*.Tests.cs|conftest.py)
+          *.test.*|*.spec.*|*_test.*|test_*|*Test.php|*Spec.php|*.Tests.cs|*Tests.cs|*Test.cs|conftest.py{{EXTRA_TEST_PATTERNS}})
             RFILES="$RFILES
 $rf" ;;
         esac

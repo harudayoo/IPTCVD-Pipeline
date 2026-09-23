@@ -19,6 +19,7 @@ A field is not CONFIRMED until its command has been executed successfully.
 | Front-end root | {{FRONTEND_ROOT}} | |
 | Test root | {{TEST_ROOT}} | |
 | Shared surfaces | {{SHARED_SURFACES}} | |
+| Extra test patterns | {{EXTRA_TEST_PATTERNS_RAW}} | |
 | Design token file | {{TOKEN_FILE}} | |
 | Has UI | {{HAS_UI}} | |
 
@@ -31,6 +32,24 @@ existing file in them is never gated.
 
 Leave blank to switch the reuse gate off. That is a decision, not a default:
 "reuse what is already here" stays advisory until something asks.
+
+## Extra test patterns
+
+The built-in test-filename shapes (`*.test.*`, `*.spec.*`, `*_test.*`,
+`test_*`, `*Test.php`, `*Spec.php`, `*.Tests.cs`, `*Tests.cs`, `*Test.cs`,
+`conftest.py`) cover Go, Rust, most JS/TS layouts, PHP and .NET's two common
+test-suffix conventions. A stack with its own convention this list does not
+know -- `*_spec.rb`, `*.feature`, whatever this project actually uses --
+needs it named here, comma-separated, or the TEST phase cannot write its own
+failing test: the file it just created reads as ordinary source and blocks
+like any other.
+
+SQL and reporting roots usually have no filename convention a hook could
+recognise as a test at all. That is expected, not a gap to fill here --
+those slices normally record `--red "n/a: <reason>"` instead of a real test
+file, exactly like a design token with no behaviour to pin.
+
+Leave blank if the built-in list already covers this stack.
 
 ## Worktrees
 
