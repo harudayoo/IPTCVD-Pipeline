@@ -1039,11 +1039,19 @@ Two rules of thumb regardless of tier:
 
 - The gate hook protects only the source roots named in your profile. Files
   outside them are not gated, by design.
-- `bash-gate` fails **open** on shell forms it cannot parse. It does not cover a
-  write performed by a script invoked by path (`./tool.sh` that writes source
-  internally), or one made inside an interactive editor session. Those remain
-  the Edit/Write door's job. The list of what it *does* cover is in the header
-  of the hook, and every entry on it is a test in `test/hooks.sh`.
+- `bash-gate` fails **open** on shell forms it cannot parse, and it cannot
+  parse everything — a wrapper it has not been taught, or a write inside an
+  interactive editor session. The list of what it *does* cover is in the
+  header of the hook, and every entry on it is a test in `test/hooks.sh`.
+  `bash-audit` backstops the rest: it does not parse the command at all, it
+  diffs which guarded files are dirty before and after the call (by content
+  hash, not just path, so a second write to an already-dirty file is still
+  caught) and refuses whatever changed. It runs `PostToolUse`, so it cannot
+  undo a write that already happened — it names the file and asks for a
+  revert or a properly-opened gate, one step later than the pre-emptive
+  block. Its own residual gap: a write that restores a file's exact original
+  bytes before the check runs is invisible to a content hash, same as it
+  would be to a timestamp.
 - `hook-integrity.sh` makes disarming the pipeline **visible**, not impossible.
   Anyone with commit access can re-record the manifest. It is defence in depth
   against a silent edit, not a permission system.
@@ -1075,12 +1083,15 @@ Two rules of thumb regardless of tier:
 - `security.md`'s scope-boundary and resolver-pattern rules describe two
   *shapes* of authorisation bug, not a scanner. They tell a reviewing agent what
   to look for; they do not replace a real SAST or dependency tool.
-- Hook **order is not a thing you have.** Claude Code runs all matching hooks in
-  parallel and does not document which decision wins when one returns `deny`
-  and another `allow`. Nothing in this pipeline depends on an order; if you add
-  a `Bash` hook of your own that both rewrites commands *and* refuses some,
-  you are the one introducing the race, and `test/hooks.sh` §10b is the shape
-  of test that would catch it.
+- Hook **order is not a thing you have** — Claude Code runs all matching hooks
+  in parallel — but PRECEDENCE is documented, and it favours the cautious
+  side: exit 2, or a hook's own `permissionDecision: "deny"`, beats any other
+  hook's `"allow"` in the same batch, and no hook `"allow"` overrides a
+  `permissions.deny` rule (DESIGN-RATIONALE.md §10.9). Nothing in this
+  pipeline depends on it anyway; if you add a `Bash` hook of your own that
+  both rewrites commands *and* refuses some, you are the one introducing a
+  dependency on a same-batch precedence rule, and `test/hooks.sh` §10b is
+  the shape of test that would catch a domain overlap regardless.
 - `savings.sh` reports **bytes** as measured and **tokens** as an estimate at
   ~4 bytes/token. That ratio is a rule of thumb for prose and is optimistic for
   test output, where stack traces, paths and punctuation tokenise worse. Quote
@@ -1091,6 +1102,28 @@ Two rules of thumb regardless of tier:
   lever, not a judge of how you pulled it.
 - Claude Code changes weekly. If a frontmatter field or command in here stops
   matching `code.claude.com/docs`, the docs win. Open an issue.
+- `bash-gate` recognises PowerShell/pwsh write verbs (`Set-Content`,
+  `Copy-Item`, ...) but deliberately does NOT match bare `cmd` as an
+  interpreter: three letters common in unrelated text (`command`, a path
+  segment, a variable name) would false-positive far more than it would ever
+  catch. `cmd.exe`'s own verbs are covered only when driven via
+  powershell/pwsh, which is by far the more common agent-reachable shape.
+- `find -exec/-execdir/-ok` is recognised as a write only when the exec'd
+  program is one of a fixed, named list (`sed`, `cp`, `rm`, ...). A write
+  program outside that list, or invoked through a further wrapper, is not
+  detected by `bash-gate` -- `bash-audit` remains the backstop for it.
+- A hand-typed `--red` with no `test --red-cmd` record behind it is still
+  **accepted**, not refused -- refusing it outright would remove the escape
+  valve `--red "n/a: <reason>"` exists to provide for a slice whose test
+  predates this recording mechanism. It is logged as `red-manual` rather
+  than `red-recorded` in `gate-log.tsv`, so `/studio-report` can show the
+  rate and a team can decide whether to ratchet it down.
+- Each `git worktree` gets its own gate, judged by its own
+  `.claude/state/gate.json` and logged to its own `gate-log.tsv`. The
+  `merge=union` `.gitattributes` entry that keeps two worktrees' logs from
+  conflicting on merge is added by `install.sh` going forward; an existing
+  install picks it up only after re-running `install.sh` or adding the line
+  by hand.
 
 ## Further reading
 

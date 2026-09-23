@@ -82,9 +82,12 @@ CMD="$(json_field "$INPUT" 'tool_input.command')"
 
 # Fail CLOSED when the payload could not be parsed but plainly names a guarded
 # root. Every parser failing is not a reason to wave a write through; it is
-# exactly when a guard should refuse and say so.
+# exactly when a guard should refuse and say so. Case-INSENSITIVE, matching
+# gate-check.sh's own guarded-root match (`SRC/x.ts` is `src/x.ts` on Windows
+# and macOS) -- this residual check is the one place in this file that never
+# reaches gate-check.sh at all, so it has to carry that case-folding itself.
 if [ -z "${CMD:-}" ]; then
-  if printf '%s' "$INPUT" | grep -qE "${ROOT_ALT}(/|\$)"; then
+  if printf '%s' "$INPUT" | grep -qiE "${ROOT_ALT}(/|\$)"; then
     echo 'BLOCKED: could not parse the command from the hook payload, and it names' >&2
     echo '  a guarded source root. Refusing to guess. Re-run the write through the' >&2
     echo '  Edit/Write tool, which is gated separately.' >&2
@@ -598,7 +601,7 @@ case "$CMD" in
       while IFS= read -r hit; do
         [ -n "$hit" ] || continue
         add_target "$(printf '%s' "$hit" | sed 's/^[^A-Za-z0-9_]//')"
-      done < <(printf '%s' "$CMD" | grep -oE "(^|[^A-Za-z0-9_./-])(${ROOT_ALT}/[A-Za-z0-9_./-]+|(package|composer)\.json|Cargo\.toml|go\.mod|pyproject\.toml)" || true)
+      done < <(printf '%s' "$CMD" | grep -oiE "(^|[^A-Za-z0-9_./-])(${ROOT_ALT}/[A-Za-z0-9_./-]+|(package|composer)\.json|Cargo\.toml|go\.mod|pyproject\.toml)" || true)
     fi
     ;;
 esac
@@ -621,7 +624,7 @@ esac
 # PROGRAM to be carried by the xargs too. A `> $VAR` redirect needs no such
 # qualifier: it is a write by construction.
 if [ -z "${TARGETS// /}" ]; then
-  if printf '%s' "$CMD" | grep -qE "(^|[^A-Za-z0-9_./-])${ROOT_ALT}(/|\$)" \
+  if printf '%s' "$CMD" | grep -qiE "(^|[^A-Za-z0-9_./-])${ROOT_ALT}(/|\$)" \
      && { printf '%s' "$CMD" | grep -qE '>[|]?[[:space:]]*[$]' \
           || { printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(xargs|parallel)([[:space:]]|$)' \
                && printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(cp|mv|rm|dd|tee|sponge|install|ln|truncate|shred|sed)([[:space:]]|$)'; }; }; then

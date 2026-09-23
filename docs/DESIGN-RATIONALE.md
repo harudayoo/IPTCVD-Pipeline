@@ -1152,6 +1152,8 @@ sed -i 's/x/y/' src/app.ts   # .claude/hooks/
 
 It is also unnecessary: the scripts are invoked as `bash .claude/scripts/…`, and `bash` is not a program the hook extracts targets from. The safest allowlist is the one you can delete.
 
+**Residual gaps, named rather than hidden.** Wrapper peeling, `-c` recursion (three levels), archive and bulk-rewrite detection, and root matching all closed real, measured bypasses (the f4917a6 audit's slice 8) — but a parser is still a parser. Two gaps are accepted rather than chased further: `find -exec`/`-execdir`/`-ok` is recognised as a write only when the exec'd program is one of a fixed, named list, so a write program outside it — or reached through a further wrapper this file has not been taught — passes unseen; and PowerShell/pwsh write verbs are matched, but a bare `cmd` is deliberately NOT added to the interpreter list, because three letters that common in unrelated text (`command`, a path segment, a variable name) would false-positive on far more than it would ever catch. §10.6's backstop is what makes both of these acceptable: neither gap is silent, it is one step slower.
+
 ## 10.6 Hook 6 — the backstop
 
 §10.5 is a parser, and a parser will always miss a shape eventually: a script invoked by path (`bash w.sh`, where `w.sh` contains the actual write), a wrapper this repo has not been taught, tomorrow's tool. The README says so plainly rather than pretending the parser is complete. This hook does not try to extend the parser. It stops parsing the command at all.
