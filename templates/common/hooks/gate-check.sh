@@ -53,7 +53,16 @@ fi
 PROTECTED="{{SOURCE_ROOTS_REGEX}}"
 TEST_ROOT="{{TEST_ROOT}}"
 SHARED_SURFACE="{{SHARED_SURFACE_REGEX}}"
-GATE=".claude/state/gate.json"
+
+# $STUDIO_ROOT is set by studio_normalise_path above (via studio_find_root):
+# the directory of the nearest ancestor carrying its OWN gate.json, which for
+# a file inside .worktrees/feat/ is that worktree, not the main checkout. A
+# worktree's gate is judged by ITS OWN phase for exactly this reason -- an
+# edit inside one must never be silently governed by whatever phase the outer
+# checkout happens to be in. Falls back to the plain relative path (resolved
+# by the shell against $PWD, same as before this existed) when no gate.json
+# was found anywhere up the tree.
+GATE="${STUDIO_ROOT:+$STUDIO_ROOT/}.claude/state/gate.json"
 
 # Dependency manifests are guarded too. Ecosystem-independent, and matched
 # EXACTLY at the repo root so a downloaded package's own manifest under a

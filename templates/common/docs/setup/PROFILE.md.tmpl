@@ -32,6 +32,19 @@ existing file in them is never gated.
 Leave blank to switch the reuse gate off. That is a decision, not a default:
 "reuse what is already here" stays advisory until something asks.
 
+## Worktrees
+
+Each `git worktree` has its **own** `.claude/state/gate.json`, and hooks judge
+a file by the nearest one walking up from that file, not by the main
+checkout's. Two consequences:
+
+- Run `bash .claude/scripts/gate.sh ...` from **inside** the worktree you are
+  working in. Running it from the main checkout only ever opens or closes the
+  main checkout's gate, never a worktree's.
+- A new worktree starts with no gate file at all, which reads as `idle` --
+  guarded source stays blocked there until you open it, exactly as a fresh
+  clone would.
+
 ## Verification log
 Run every command above and record its exit code here.
 

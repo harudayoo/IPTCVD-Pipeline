@@ -636,6 +636,20 @@ if [ "$DRY_RUN" = 0 ]; then
   done
 fi
 
+c_grn "7b. .gitattributes"
+# gate-log.tsv IS committed (unlike the two logs above), and it is append-only
+# by every hook that writes it -- a plain-text merge conflict on it is a
+# conflict at EOF, on lines nobody wrote by hand, between two branches that
+# each just want their own rows kept. `merge=union` keeps both sides' lines
+# instead of asking a human to resolve a diff that was never really in
+# conflict. This matters MORE with worktrees: each one has its own gate and
+# its own gate-log.tsv, and two of them merging back into the same branch is
+# exactly the scenario this line exists for.
+if [ "$DRY_RUN" = 0 ]; then
+  line=".claude/state/gate-log.tsv merge=union"
+  grep -qxF "$line" "$TARGET/.gitattributes" 2>/dev/null || echo "$line" >> "$TARGET/.gitattributes"
+fi
+
 # ------------------------------------------------------------------ report
 echo
 c_grn "Installed: $TIER_NAME  ($n_agents agents · $n_skills skills · $n_rules rules · $n_hooks hooks)"

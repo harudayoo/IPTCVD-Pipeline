@@ -150,6 +150,12 @@ studio_has_symlink_ancestor() {
 #
 # ONE nameref, assigned once at the end. Everything in between is a plain
 # local -- see the note on studio_canon for why that matters.
+#
+# Sets the GLOBAL $STUDIO_ROOT as a side effect -- the directory the path was
+# stripped relative to, forward-slash form. A caller that needs to read or
+# write THIS FILE's gate (gate-check.sh, deciding where .claude/state/
+# gate.json lives) reads it back afterward, so an edit inside a worktree is
+# judged by the worktree's own gate, not the main checkout's.
 studio_normalise_path() {
   local -n _out=$1
   local p resolved root root_l pwd_w
@@ -172,22 +178,60 @@ studio_normalise_path() {
     studio_canon "$p"; p="$STUDIO_CANON"
   fi
 
-  # Strip the repo root. Compare case-insensitively: the harness sends "c:/..."
-  # while `pwd -W` reports "C:/...", and that one-character difference is enough
-  # to defeat prefix stripping entirely. ${v,,} is a bash builtin -- this runs
-  # on the latency path of every Edit, and on Windows a spawn costs ~120ms, so
-  # a tr/grep pipeline here would cost more than the rest of the hook.
-  pwd_w=$(pwd -W 2>/dev/null || true)
-  for root in "$PWD" "$pwd_w"; do
-    [ -n "$root" ] || continue
-    root_l=${root//\\//}; root_l=${root_l,,}
-    case "${p,,}" in
-      "$root_l"/*) p="${p:$(( ${#root_l} + 1 ))}"; break ;;
-    esac
-  done
+  # The ROOT to strip is the nearest ancestor directory carrying its OWN
+  # .claude/state/gate.json, not necessarily $PWD -- see studio_find_root.
+  # Falls back to the ORIGINAL $PWD/`pwd -W` matching when no gate.json
+  # exists anywhere up the tree (pre-configuration, or a repo layout this
+  # cannot see), so an unconfigured install behaves exactly as it did before
+  # this existed. Compared case-insensitively either way: the harness sends
+  # "c:/..." while `pwd -W` reports "C:/...", and that one-character
+  # difference is enough to defeat prefix stripping entirely. ${v,,} is a
+  # bash builtin -- this runs on the latency path of every Edit, and on
+  # Windows a spawn costs ~120ms, so a tr/grep pipeline here would cost more
+  # than the rest of the hook.
+  studio_find_root "$p"
+  if [ -n "$STUDIO_ROOT" ]; then
+    root_l=${STUDIO_ROOT,,}
+    case "${p,,}" in "$root_l"/*) p="${p:$(( ${#STUDIO_ROOT} + 1 ))}" ;; esac
+  else
+    pwd_w=$(pwd -W 2>/dev/null || true)
+    for root in "$PWD" "$pwd_w"; do
+      [ -n "$root" ] || continue
+      root_l=${root//\\//}; root_l=${root_l,,}
+      case "${p,,}" in
+        "$root_l"/*) p="${p:$(( ${#root_l} + 1 ))}"; STUDIO_ROOT="$root_l"; break ;;
+      esac
+    done
+  fi
 
   _out="$p"
   return 0
+}
+
+# studio_find_root <abs-canonical-path>
+#
+# Sets the global $STUDIO_ROOT to the directory of the nearest ancestor
+# carrying its OWN .claude/state/gate.json, walking UP from the file's
+# directory -- so a worktree's own gate is found before the main checkout's,
+# since the walk reaches the worktree root first. Sets $STUDIO_ROOT="" if
+# none exists anywhere up to the filesystem root; the caller then falls back
+# to $PWD, exactly as this behaved before worktrees were considered at all.
+#
+# Builtins only -- no spawn -- because this runs on the Edit/Write hot path
+# alongside studio_normalise_path, which is the only caller.
+studio_find_root() {
+  local p="$1" d
+  case "$p" in */*) d="${p%/*}" ;; *) d="." ;; esac
+  [ -n "$d" ] || d="/"
+  while :; do
+    if [ -f "$d/.claude/state/gate.json" ]; then STUDIO_ROOT="$d"; return 0; fi
+    case "$d" in
+      /|[A-Za-z]:) break ;;                       # filesystem root or bare drive: nothing higher
+      */*) d="${d%/*}"; [ -n "$d" ] || d="/" ;;
+      *) break ;;                                  # no separator left to strip -- give up
+    esac
+  done
+  STUDIO_ROOT=""
 }
 
 # ------------------------------------------------------------- gate decisions
@@ -198,10 +242,14 @@ studio_normalise_path() {
 # with zero blocks and no plan on record means a bypass nobody has found yet.
 # Best-effort by construction -- a logging failure must never affect a verdict.
 studio_log_gate() {  # studio_log_gate <hook> <verdict> <phase> <target> [reason]
-  [ -d .claude/state ] || return 0
+  # $STUDIO_ROOT, when set by a prior studio_normalise_path call, is the
+  # worktree (or main checkout) the DECISION was actually made for -- the
+  # log lives beside the gate.json that produced it, not always beside $PWD's.
+  local dir="${STUDIO_ROOT:-.}"
+  [ -d "$dir/.claude/state" ] || return 0
   { printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "${5:-}" \
-      >> .claude/state/gate-log.tsv; } 2>/dev/null || true
+      >> "$dir/.claude/state/gate-log.tsv"; } 2>/dev/null || true
   return 0
 }
 

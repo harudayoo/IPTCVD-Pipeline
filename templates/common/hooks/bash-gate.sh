@@ -409,7 +409,12 @@ fi
 # --- delegate to the one gate ----------------------------------------------
 # gate-check.sh already decides which roots are guarded, what a new surface is,
 # and what the block message says. Re-deciding any of that here is how the two
-# doors drift apart.
+# doors drift apart. It also decides WHICH gate.json governs $t -- by walking
+# up from $t's own path for the nearest .claude/state/gate.json (studio_find_
+# root in _guard.sh), not by this hook's `cd` above. So a target that lands
+# inside a worktree is judged by that worktree's gate even though bash-gate
+# itself never left the main checkout: the root comes from the TARGET, never
+# from where this hook happens to be running.
 SEEN=""
 while IFS= read -r t; do
   [ -n "$t" ] || continue
