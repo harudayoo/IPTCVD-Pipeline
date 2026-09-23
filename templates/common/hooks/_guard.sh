@@ -196,3 +196,77 @@ studio_log_gate() {  # studio_log_gate <hook> <verdict> <phase> <target> [reason
       >> .claude/state/gate-log.tsv; } 2>/dev/null || true
   return 0
 }
+
+# ------------------------------------------------------------ content floors
+#
+# `{"phase":"create","problem":"x","red":"x","reuse":"x"}`, written by hand,
+# used to open the gate: gate-check.sh checked only that problem/red were
+# NON-EMPTY, while gate.sh's own `create` command refused the identical
+# one-character values. Two implementations of "the plan says something" that
+# happened to agree until somebody wrote gate.json directly, which is the
+# ordinary shape of the bypass the reuse and dependency gates exist to name --
+# except this time it was the CONTENT check itself with two doors.
+#
+# One function, called from both, so there is exactly one floor to change.
+#
+# studio_validate_notes <problem> <red> [reuse] [deps]
+#
+# Checks problem, then red, then reuse and deps (only if non-empty -- an
+# absent reuse/deps is a PRESENCE question the caller already asks
+# separately; this only judges a value that was actually supplied). Prints
+# the reason for the FIRST failing floor to stderr and returns 1. Returns 0
+# and sets STUDIO_INVALID_KEY="" when every supplied note clears its floor.
+#
+# Builtins only -- ${v//[[:space:]]/} and ${v,,}, no `tr`, no pipe -- because
+# gate-check.sh calls this on every guarded Edit/Write. The original _dense in
+# gate.sh piped through `tr`, which is fine for a CLI invoked a few times a
+# session and would be one more spawn per edit here.
+studio_validate_notes() {
+  local problem="$1" red="$2" reuse="${3:-}" deps="${4:-}" dense name val
+
+  dense="${problem//[[:space:]]/}"
+  if [ ${#dense} -lt 12 ]; then
+    STUDIO_INVALID_KEY="problem"
+    echo "invalid problem: ${#dense} characters of content (need at least 12)." >&2
+    echo "  The IDEA phase is what BREAKS and what is out of scope -- a sentence, not a token." >&2
+    return 1
+  fi
+
+  case "${red,,}" in
+    n/a*)
+      local reason="${red#*:}"
+      [ "$reason" = "$red" ] && reason=""   # no colon at all
+      dense="${reason//[[:space:]]/}"
+      if [ ${#dense} -lt 8 ]; then
+        STUDIO_INVALID_KEY="red"
+        echo 'invalid red: "n/a" without a reason is not an answer.' >&2
+        echo '  Use: "n/a: <why this change has no failing test to point at>"' >&2
+        return 1
+      fi
+      ;;
+    *)
+      dense="${red//[[:space:]]/}"
+      if [ ${#dense} -lt 12 ]; then
+        STUDIO_INVALID_KEY="red"
+        echo "invalid red: ${#dense} characters of content (need at least 12, or \"n/a: <why>\")." >&2
+        echo '  The TEST phase names the test that fails NOW, or says "n/a: <why>".' >&2
+        return 1
+      fi
+      ;;
+  esac
+
+  for name in reuse deps; do
+    val="${!name}"
+    [ -n "$val" ] || continue
+    dense="${val//[[:space:]]/}"
+    if [ ${#dense} -lt 12 ]; then
+      STUDIO_INVALID_KEY="$name"
+      echo "invalid $name: ${#dense} characters of content (need at least 12)." >&2
+      echo "  Name what you checked first and why it does not cover this." >&2
+      return 1
+    fi
+  done
+
+  STUDIO_INVALID_KEY=""
+  return 0
+}

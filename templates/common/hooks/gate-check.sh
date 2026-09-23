@@ -298,6 +298,26 @@ if [ -n "$MISSING" ]; then
   exit 2
 fi
 
+# A KEY being present is not the same as it carrying an ANSWER.
+# {"phase":"create","problem":"x","red":"x","reuse":"x"}, written by hand,
+# used to open this gate: the check above only asked "is there a string
+# here", and gate.sh's own `create` command refused those same one-character
+# values through a SEPARATE floor that lived only in the CLI. A hand-written
+# gate.json never went through gate.sh, so it never met that floor at all.
+# studio_validate_notes is the one function both now call.
+#
+# Called DIRECTLY, not through $(...): a command substitution forks a
+# subshell, and STUDIO_INVALID_KEY is a plain global specifically so a caller
+# can read it back after the call -- a subshell's copy would vanish with it,
+# and the function's own echo already goes straight to this hook's real
+# stderr, which is exactly where a BLOCKED message belongs.
+if ! studio_validate_notes "$PROBLEM" "$RED" "$REUSE" "$DEPS"; then
+  echo "  file: $FILE" >&2
+  studio_log_gate gate-check BLOCK "$PHASE" "$FILE" "invalid-${STUDIO_INVALID_KEY:-notes}"
+  unblock_hint
+  exit 2
+fi
+
 # --- gate 4: reaching OUTSIDE the codebase ---------------------------------
 if [ "$MANIFEST" = "1" ]; then
   if [ -n "${DEPS:-}" ]; then

@@ -45,6 +45,20 @@ set -uo pipefail
 # reports success while telling you nothing.
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
+# The content floors (problem/red/reuse/deps, how long is long enough) live in
+# _guard.sh's studio_validate_notes now, not here -- a hand-written gate.json
+# used to open the gate on notes this CLI would have refused, because the two
+# checks were separate implementations that happened to agree. One function,
+# sourced by both.
+GUARD_SH="$(dirname "$SELF")/../hooks/_guard.sh"
+if [ -f "$GUARD_SH" ]; then
+  # shellcheck source=/dev/null
+  . "$GUARD_SH"
+else
+  echo "gate.sh: cannot find _guard.sh at $GUARD_SH -- the content floors live there now." >&2
+  exit 1
+fi
+
 cd "$(dirname "$0")/../.." || exit 1
 GATE=".claude/state/gate.json"
 
@@ -59,10 +73,6 @@ usage() {
   sed -n "2,$(( $(grep -n '^set -u' "$SELF" | head -1 | cut -d: -f1) - 1 ))p" "$SELF" \
     | sed 's/^# \{0,1\}//'
 }
-
-# Dense length: whitespace stripped, so "   ok   " does not read as eight
-# characters of content.
-_dense() { printf '%s' "$1" | tr -d '[:space:]'; }
 
 CMD="${1:-show}"
 [ $# -gt 0 ] && shift
@@ -108,15 +118,21 @@ case "$CMD" in
     PROBLEM=$(read_key problem); RED=$(read_key red)
     VAULT=$(read_key vault); REUSE=$(read_key reuse); DEPS=$(read_key deps)
 
-    # Advancing INTO a source-writing phase still requires the answers. If the
-    # slice never had them, this is the moment to say so rather than to open a
-    # gate on nothing.
+    # Advancing INTO a source-writing phase still requires the answers, and
+    # requires them to clear the same floor `create`/`verify` enforce below --
+    # a hand-written gate.json is one `advance` away from carrying "x" as its
+    # problem note forever, since advance only ever CARRIES notes forward, it
+    # never used to check them.
     case "$NEXT" in
       create|verify)
         if [ -z "$PROBLEM" ] || [ -z "$RED" ]; then
           echo "refusing to advance to '$NEXT': the slice on record carries no problem/red note." >&2
           echo "  Open it properly instead:" >&2
           echo "    bash .claude/scripts/gate.sh $NEXT --problem \"<what breaks>\" --red \"<the failing test, or n/a: why>\"" >&2
+          exit 1
+        fi
+        if ! studio_validate_notes "$PROBLEM" "$RED" "$REUSE" "$DEPS"; then
+          echo "refusing to advance to '$NEXT': the note above is on record but does not answer." >&2
           exit 1
         fi
         ;;
@@ -171,50 +187,13 @@ case "$CMD" in
       exit 1
     fi
 
-    # Both must carry an ANSWER, not a keystroke. The hook can only check that
-    # something was stated; this checks a SENTENCE was stated. `n/a` on its own
-    # is the specific evasion worth naming: the entire value of --red is that a
-    # change with no failing test has to say WHY, and a bare `--red n/a` turns
-    # the phase back into the box-tick it replaced.
-    P_C=$(_dense "$PROBLEM")
-    if [ ${#P_C} -lt 12 ]; then
-      echo "refusing: --problem is ${#P_C} characters of content." >&2
-      echo '  The IDEA phase is what BREAKS and what is out of scope — a sentence, not a token.' >&2
+    # Both must carry an ANSWER, not a keystroke. A hook can only check that
+    # something was stated; studio_validate_notes checks a SENTENCE was
+    # stated -- the same function gate-check.sh calls, so a hand-written
+    # gate.json can no longer clear a floor this CLI would have refused.
+    if ! studio_validate_notes "$PROBLEM" "$RED" "$REUSE" "$DEPS"; then
       exit 1
     fi
-    case $(printf '%s' "$RED" | tr '[:upper:]' '[:lower:]') in
-      n/a*)
-        REASON="${RED#*:}"
-        [ "$REASON" = "$RED" ] && REASON=""   # no colon at all
-        R_C=$(_dense "$REASON")
-        if [ ${#R_C} -lt 8 ]; then
-          echo 'refusing: --red "n/a" without a reason is not an answer.' >&2
-          echo '  Use: --red "n/a: <why this change has no failing test to point at>"' >&2
-          exit 1
-        fi
-        ;;
-      *)
-        R_C=$(_dense "$RED")
-        if [ ${#R_C} -lt 12 ]; then
-          echo "refusing: --red is ${#R_C} characters of content." >&2
-          echo '  The TEST phase names the test that fails NOW, or says "n/a: <why>".' >&2
-          exit 1
-        fi
-        ;;
-    esac
-
-    # --reuse and --deps are the same shape of answer and get the same floor.
-    # A one-word "yes" here is the box-tick the reuse gate exists to refuse.
-    for pair in "reuse:$REUSE" "deps:$DEPS"; do
-      name="${pair%%:*}"; val="${pair#*:}"
-      [ -n "$val" ] || continue
-      V_C=$(_dense "$val")
-      [ ${#V_C} -ge 12 ] && continue
-      echo "refusing: --$name is ${#V_C} characters of content." >&2
-      echo "  Name what you checked first and why it does not cover this — e.g." >&2
-      echo "  \"no date helper here; hand-rolled the same parser in 3 places already\"." >&2
-      exit 1
-    done
 
     mkdir -p "$(dirname "$GATE")"
     {
