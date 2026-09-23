@@ -72,7 +72,12 @@ fi
 
 # --- roots this hook watches --------------------------------------------
 PROTECTED="{{SOURCE_ROOTS_REGEX}}"
-ROOT_ALT=$(printf '%s' "$PROTECTED" | sed 's/^\^(//; s/)\/$//; s/^\^//; s/\/$//')
+# "^(src|app)(/|$)" -> "src|app" -> split into git PATHSPECS, not a regex --
+# unlike bash-gate.sh's ROOT_ALT (used only inside grep -E, where the outer
+# parens are harmless regex grouping), this one feeds `git diff --/-- <paths>`
+# directly, and git has no idea what to do with a literal "(src)" pathspec.
+ROOT_ALT="${PROTECTED#^}"; ROOT_ALT="${ROOT_ALT%'(/|$)'}"
+ROOT_ALT="${ROOT_ALT#\(}"; ROOT_ALT="${ROOT_ALT%\)}"
 [ -n "$ROOT_ALT" ] || exit 0
 OLDIFS="$IFS"; IFS='|'; set -- $ROOT_ALT; IFS="$OLDIFS"
 ROOTS="$*"

@@ -44,7 +44,7 @@ mkdir -p "$WORK/.claude/hooks" "$WORK/.claude/state" "$WORK/.claude/scripts" \
 
 for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post-edit.sh session-log.sh bash-audit.sh; do
   [ -f "$SRC/templates/common/hooks/$h" ] || continue
-  sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
+  sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
       -e 's|{{TEST_ROOT}}|tests|g' \
       -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
       -e 's|{{TEST_COMMAND}}|npm test|g' \
@@ -493,7 +493,7 @@ else
 fi
 # Undo the tamper and re-record, so every later section sees the hook it
 # expects rather than one carrying this test's own appended line.
-sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
+sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
     -e 's|{{TEST_ROOT}}|tests|g' \
     -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
     "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check.sh

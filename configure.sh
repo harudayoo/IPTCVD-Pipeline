@@ -245,8 +245,14 @@ done
 
 [ -n "$SOURCE_ROOTS" ]  || die "could not read 'Source roots' from the profile"
 
-# Source roots -> an ERE the hooks can grep with:  "app,src"  ->  "^(app|src)/"
-SOURCE_ROOTS_REGEX="^($(printf '%s' "$SOURCE_ROOTS" | tr -d ' ' | tr ',' '|'))/"
+# Source roots -> an ERE the hooks can grep with:  "app,src"  ->  "^(app|src)(/|$)"
+#
+# (/|$) rather than a bare trailing /: a BARE root target -- `cp /tmp/a.ts src`,
+# which copies INTO the directory named `src`, or a bash-gate delegation whose
+# target collapsed to exactly "src" with nothing after it -- named the root
+# with no trailing slash at all, and "^(src)/" matched none of it. Measured:
+# `cp /tmp/a.ts src` walked straight past a closed gate under the old pattern.
+SOURCE_ROOTS_REGEX="^($(printf '%s' "$SOURCE_ROOTS" | tr -d ' ' | tr ',' '|'))(/|$)"
 
 # Shared surfaces -> an ERE the gate can grep with:
 #   "src/components,src/services"  ->  "^(src/components|src/services)/"

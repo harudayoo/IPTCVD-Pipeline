@@ -247,7 +247,8 @@ fi
 # regex, so source roots are still declared in exactly one place.
 case "$FILE" in
   /*|[A-Za-z]:/*)
-    ROOTS=$(printf '%s' "$PROTECTED" | sed 's/^\^(//; s/)\/$//; s/^\^//; s/\/$//')
+    ROOTS="${PROTECTED#^}"; ROOTS="${ROOTS%'(/|$)'}"
+    ROOTS="${ROOTS#\(}"; ROOTS="${ROOTS%\)}"
     FILE_LC=${FILE,,}
     OLDIFS="$IFS"; IFS='|'
     for r in $ROOTS; do
