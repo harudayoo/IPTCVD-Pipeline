@@ -31,6 +31,13 @@
 set -uo pipefail
 
 STATE=".claude/state"
+# filter-log.tsv carries two more columns than this script reads (the command
+# and the gate phase, added so a filter-log row can be told apart from
+# another). Nothing below needs a change for that: every field this file
+# reads is $1-$4, positioned BEFORE the new columns, and awk's default
+# whitespace field-splitting never shifts an EARLIER field just because a
+# LATER one happens to contain spaces. A row with 4 columns or 6 both parse
+# identically here.
 FLOG="$STATE/filter-log.tsv"
 SLOG="$STATE/session-log.tsv"
 SHARED="docs/reports/savings"      # committed; one file per developer

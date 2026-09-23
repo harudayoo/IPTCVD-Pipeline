@@ -24,8 +24,16 @@ case "$CMD" in
   *) echo '{}'; exit 0 ;;
 esac
 
-# Never touch a command the user already piped or redirected themselves.
-case "$CMD" in *\|*|*\>*) echo '{}'; exit 0 ;; esac
+# Never touch a command the user already piped or redirected themselves, AND
+# never approve a COMPOUND command -- `npm test && git push --force origin
+# main` starts with the exact prefix matched above, contains no `|` or `>`,
+# and this hook used to rewrite it with `permissionDecision: "allow"` anyway,
+# which is an explicit approval covering the ENTIRE command, force-push
+# included, not just the part that looked like a test run. bash-gate.sh may or
+# may not have an opinion on the non-test half; this hook must never be the
+# reason it never got asked. `||` is already covered by the `|` check above --
+# it contains one.
+case "$CMD" in *\|*|*\>*|*\<*|*'&'*|*';'*|*'$('*|*'`'*|*$'\n'*) echo '{}'; exit 0 ;; esac
 
 # --- the rewrite must preserve the ORIGINAL command's exit status -----------
 #
@@ -88,12 +96,34 @@ FILTER="grep -B2 -A8 -E '$STUDIO_ASSERTION_PATTERN'"
 # Every part of this is `|| true` and `2>/dev/null`. A recorder that can fail a
 # build has inverted the point of the hook it lives in: this file fails OPEN,
 # and measurement is never the thing that closes it.
+#
+# The row also carries the COMMAND and the gate PHASE at rewrite time, neither
+# of which the original row had: without them a filter-log entry could not be
+# told apart from another, and the compliance report had no way to say which
+# phase the savings happened in. Escaped for embedding into NEW as a LITERAL
+# printf argument -- backslash, double-quote, and `$` (the last one because
+# NEW is executed later as code, and an un-escaped `$` in this position would
+# be re-expanded by that LATER shell instead of logged as the text it was).
+# Tabs and newlines are stripped rather than escaped, because a literal tab
+# here would silently add a column. Truncated to 200 characters: this is a
+# diagnostic row, not a transcript.
+CMD_LOGGED=$(printf '%s' "$CMD" | tr '\t\n' '  ' | cut -c1-200 | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g')
+PHASE_LOGGED=""
+if [ -f .claude/state/gate.json ]; then
+  if command -v jq >/dev/null 2>&1; then
+    PHASE_LOGGED=$(jq -r '.phase // ""' .claude/state/gate.json 2>/dev/null) || PHASE_LOGGED=""
+  fi
+  [ -n "$PHASE_LOGGED" ] || PHASE_LOGGED=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' .claude/state/gate.json 2>/dev/null \
+    | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//')
+fi
+[ -n "$PHASE_LOGGED" ] || PHASE_LOGGED="-"
+
 LOGGER="__r=\$(mktemp 2>/dev/null) __f=\$(mktemp 2>/dev/null)"
 NEW="$LOGGER; $CMD 2>&1 | tee \"\$__r\" 2>/dev/null | $FILTER | awk 'NR<=150' | tee \"\$__f\" 2>/dev/null"
 # [0] and not [1]: `$LOGGER` ends in `;`, so the pipeline starts at $CMD. The
 # added `tee`s are all DOWNSTREAM of it and shift nothing.
 NEW="$NEW; __rc=\${PIPESTATUS[0]}"
-NEW="$NEW; { [ -n \"\$__r\" ] && [ -n \"\$__f\" ] && mkdir -p .claude/state && printf '%s\t%s\t%s\t%s\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"\$(wc -c < \"\$__r\" | tr -d ' ')\" \"\$(wc -c < \"\$__f\" | tr -d ' ')\" \"\$__rc\" >> .claude/state/filter-log.tsv; } 2>/dev/null || true"
+NEW="$NEW; { [ -n \"\$__r\" ] && [ -n \"\$__f\" ] && mkdir -p .claude/state && printf '%s\t%s\t%s\t%s\t%s\t%s\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"\$(wc -c < \"\$__r\" | tr -d ' ')\" \"\$(wc -c < \"\$__f\" | tr -d ' ')\" \"\$__rc\" \"$CMD_LOGGED\" \"$PHASE_LOGGED\" >> .claude/state/filter-log.tsv; } 2>/dev/null || true"
 NEW="$NEW; rm -f \"\$__r\" \"\$__f\" 2>/dev/null || true"
 NEW="$NEW; [ \"\$__rc\" -ne 0 ] && echo \"[filter-output] command exited \$__rc — output above is matched lines only\"; exit \$__rc"
 

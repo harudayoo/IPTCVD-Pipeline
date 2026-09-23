@@ -328,17 +328,16 @@ fi
 # ----------------------------------------- 10b. the two Bash hooks cannot race
 head_ "10b. bash-gate and filter-output have no command in common"
 # settings.json lists bash-gate above filter-output, which READS like an
-# ordering and is not one: Claude Code runs all matching hooks in PARALLEL, and
-# does not document which decision wins when one returns deny and another
-# returns allow. A guarantee built on that list order is a guarantee built on
-# undocumented behaviour -- the exact shape of claim 4 this repo exists to
-# refuse, sitting in a settings comment where nobody would test it.
-#
-# What actually makes the pair safe is that their domains are DISJOINT:
-# filter-output rewrites only the four commands named in the profile, and none
-# of those produces a write target for bash-gate to refuse. Then no order can
-# matter, because at most one hook ever has an opinion. That is a property, and
-# a property can be tested. Order cannot.
+# ordering and is not one: Claude Code runs all matching hooks in PARALLEL.
+# DESIGN-RATIONALE.md §10.9 now documents what actually happens when they
+# disagree -- a block (exit 2, or a hook's own deny) beats any other hook's
+# allow in the same batch, and no allow overrides permissions.deny -- which is
+# a stronger guarantee than this pair needs. It is still built to never rely on
+# it: the domains are DISJOINT, filter-output rewrites only the four commands
+# named in the profile, and none of those alone produces a write target for
+# bash-gate to refuse. That is a property, and a property can be tested.
+# Ordering, and now precedence too, are things this suite refuses to depend on
+# even though one of them turned out to be documented after all.
 #
 # The gate is CLOSED here: if any of these four were ever gate-relevant, this
 # is the state in which it would show.
@@ -347,8 +346,12 @@ for c in "npm test" "npm run build" "tsc --noEmit" "npm audit"; do
   b "bash-gate stays silent on '$c'" "$c" 0
 done
 # And the converse, so the disjointness is checked from both sides: a command
-# bash-gate DOES refuse must never be one filter-output would have rewritten.
-for c in "sed -i 's/x/y/' src/services/dues.ts" "cat > src/services/new.ts" "npm i left-pad"; do
+# bash-gate DOES refuse must never be one filter-output would have rewritten --
+# including when the profile command and the guarded write share ONE command
+# line, compounded from either side.
+for c in "sed -i 's/x/y/' src/services/dues.ts" "cat > src/services/new.ts" "npm i left-pad" \
+         "npm test && sed -i 's/x/y/' src/services/dues.ts" \
+         "sed -i 's/x/y/' src/services/dues.ts && npm test"; do
   printf '{"tool_input":{"command":"%s"}}' "$(esc_json "$c")" \
     | bash .claude/hooks/filter-output.sh 2>/dev/null | grep -q '^{}$' \
     && pass "filter-output declines '$c'" \
@@ -566,8 +569,14 @@ b "git stash push"      "git stash"                                           0
 b "gate.sh itself"      "bash .claude/scripts/gate.sh show"                   0
 
 head_ "12d. filter-output never approves a compound command"
+# Compounds from BOTH sides: a dangerous command can lead or trail the exact
+# prefix this hook matches, and the anchored prefix match alone only rules
+# out the danger coming first if nothing else stops it.
 for c in "npm test && git push --force origin main" \
+         "git push --force origin main && npm test" \
          "npm test && sed -i s/x/y/ src/services/dues.ts" \
+         "npm test; rm -rf src" \
+         "npm test & rm -rf src" \
          'npm test $(rm -rf src)' \
          "npm test \`touch src/x\`"; do
   printf '{"tool_input":{"command":"%s"}}' "$(esc_json "$c")" \
@@ -575,6 +584,11 @@ for c in "npm test && git push --force origin main" \
     && pass "filter-output declines '$c'" \
     || fail "filter-output declines '$c'" "{}" "a rewrite with allow"
 done
+# And the disjointness claim from 10b, restated: a bash-gate-refused compound
+# built from a bare profile command is disjoint from an allowed one, checked
+# from both directions now that filter-output also inspects the whole string.
+b "bash-gate still refuses the compound filter-output just declined" \
+  "npm test && sed -i s/x/y/ src/services/dues.ts" 2
 
 head_ "12e. worktrees"
 set_gate '{"phase":"idle"}'
