@@ -56,7 +56,7 @@ for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post
       -e 's|{{TYPECHECK_GLOB}}|*.ts|g' \
       "$SRC/templates/common/hooks/$h" > "$WORK/.claude/hooks/$h"
 done
-cp "$SRC/templates/common/scripts/gate.sh" "$SRC/templates/common/scripts/savings.sh" "$WORK/.claude/scripts/" 2>/dev/null || true
+cp "$SRC/templates/common/scripts/gate.sh" "$SRC/templates/common/scripts/savings.sh" "$SRC/templates/common/scripts/hook-integrity.sh" "$WORK/.claude/scripts/" 2>/dev/null || true
 chmod +x "$WORK/.claude/hooks/"*.sh "$WORK/.claude/scripts/"*.sh 2>/dev/null || true
 
 : > "$WORK/src/services/dues.ts"
@@ -455,8 +455,142 @@ case "$OUT" in
 esac
 rm -rf docs/reports/savings
 
-# ------------------------------------------------------------ 12. gate.sh CLI
-head_ "12. gate.sh refuses an answer that is not an answer"
+# --------------------------------------- 11d. session-log watches its own doors
+head_ "11d. session-log surfaces a stale or tampered enforcement layer"
+# hook-integrity.sh already runs in CI, after a bad hook is already committed.
+# session-log.sh runs it again at the START of every session, so drift is
+# visible in the very transcript where it would otherwise be exploited, not
+# three commits later in a CI job nobody is watching in real time.
+rm -f .claude/state/session-log.tsv .claude/state/gate-log.tsv .claude/state/hooks.sha256
+bash .claude/scripts/hook-integrity.sh --update >/dev/null 2>&1
+OUT=$(printf '{"source":"startup"}' | bash .claude/hooks/session-log.sh 2>&1)
+RC=$?
+[ "$RC" = 0 ] && pass "a clean manifest never blocks a session start" \
+              || fail "a clean manifest never blocks a session start" "exit 0" "exit $RC"
+case "$OUT" in
+  *"INTEGRITY FAIL"*) fail "a clean manifest stays quiet" "no INTEGRITY FAIL" "$OUT" ;;
+  *) pass "a clean manifest stays quiet" ;;
+esac
+
+# Now tamper with a tracked hook the way the bypass this whole slice closes
+# would: past the Edit/Write and Bash doors, straight onto disk.
+printf '\n# tampered\n' >> .claude/hooks/gate-check.sh
+OUT=$(printf '{"source":"startup"}' | bash .claude/hooks/session-log.sh 2>&1)
+RC=$?
+[ "$RC" = 0 ] && pass "a tampered hook still never blocks a session start (fails open)" \
+              || fail "a tampered hook still never blocks a session start" "exit 0" "exit $RC"
+case "$OUT" in
+  *"INTEGRITY FAIL"*) pass "a tampered hook is surfaced on stdout at session start" ;;
+  *) fail "a tampered hook is surfaced on stdout at session start" "INTEGRITY FAIL" "$OUT" ;;
+esac
+if [ -s .claude/state/gate-log.tsv ] && grep -q "INTEGRITY FAIL" .claude/state/gate-log.tsv; then
+  pass "the integrity failure is also recorded to gate-log.tsv"
+else
+  fail "the integrity failure is recorded to gate-log.tsv" "an INTEGRITY FAIL row" "none"
+fi
+# Undo the tamper and re-record, so every later section sees the hook it
+# expects rather than one carrying this test's own appended line.
+sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
+    -e 's|{{TEST_ROOT}}|tests|g' \
+    -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
+    "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check.sh
+bash .claude/scripts/hook-integrity.sh --update >/dev/null 2>&1
+
+# ------------------------------------------------- 12. bypass probes (audit f4917a6)
+# Every probe below reproduced a live bypass against gate-check.sh, bash-gate.sh
+# and filter-output.sh at commit f4917a6, confirmed by running the hook scripts
+# directly against the crafted payload -- not inferred from the README. See
+# IPTCVD-HANDOFF.md for the fix each block drives.
+head_ "12a. enforcement layer is not writable while the gate is closed"
+set_gate '{"phase":"idle"}'
+g "Edit gate.json directly"              ".claude/state/gate.json"            2
+g "Edit gate.sh"                         ".claude/scripts/gate.sh"            2
+g "Edit settings.local.json"             ".claude/settings.local.json"        2
+b "sed a hook"                           "sed -i '2i exit 0' .claude/hooks/gate-check.sh" 2
+b "redirect into settings.local.json"    "echo '{\"disableAllHooks\":true}' > .claude/settings.local.json" 2
+b "redirect into gate.json"              "echo '{\"phase\":\"create\"}' > .claude/state/gate.json" 2
+b "chmod a hook"                         "chmod 644 .claude/hooks/gate-check.sh" 2
+
+# Must stay ALLOWED (false-positive guards):
+b "plain read"          "grep -rn foo src"                                    0
+b "xargs read"          "grep -rl foo src | xargs wc -l"                      0
+b "git status"          "git status"                                          0
+b "git stash push"      "git stash"                                           0
+b "gate.sh itself"      "bash .claude/scripts/gate.sh show"                   0
+
+# The gate must still be able to write its OWN state even with the doors above
+# closed: gate.sh runs as `bash .claude/scripts/gate.sh ...`, and `bash` is not
+# a program bash-gate extracts targets from, so the call itself never reaches
+# gate-check as a write to a protected path. gate.sh's internal `>` redirect
+# happens inside that already-running process, invisible to any hook.
+bash .claude/scripts/gate.sh create \
+  --problem "National finance summed every chapter's dues into the total" \
+  --red     "DuesTest::national_excludes_chapter fails: expected 0, got 41250" >/dev/null 2>&1
+g "gate.sh can still open the gate from behind the protected doors" "src/services/dues.ts" 0
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+
+head_ "12b. a hand-written gate.json gains nothing over gate.sh"
+set_gate '{"phase":"create","problem":"x","red":"x","reuse":"x"}'
+g "1-char notes do not open the gate"    "src/services/dues.ts"               2
+g "1-char reuse does not open new surface" "src/services/brandnew.ts"         2
+set_gate '{"phase":"create","problem":"National total sums chapter dues","red":"n/a"}'
+g "bare n/a does not open the gate"      "src/services/dues.ts"               2
+
+head_ "12c. bash-gate wrapper and shape bypasses"
+set_gate '{"phase":"idle"}'
+b "bash -c"             "bash -c \"sed -i 's/x/y/' src/services/dues.ts\""    2
+b "env prefix"          "env sed -i 's/x/y/' src/services/dues.ts"            2
+b "timeout prefix"      "timeout 5 sed -i 's/x/y/' src/services/dues.ts"      2
+b "command prefix"      "command cp /tmp/a.ts src/services/dues.ts"           2
+b "nice prefix"         "nice -n 5 sed -i 's/x/y/' src/services/dues.ts"      2
+b "subshell"            "(sed -i 's/x/y/' src/services/dues.ts)"              2
+b "--in-place"          "sed --in-place 's/x/y/' src/services/dues.ts"        2
+b "find -exec"          "find src -name '*.ts' -exec sed -i s/x/y/ {} +"      2
+b "bare root target"    "cp /tmp/a.ts src"                                    2
+b "backslash target"    'echo x > "src\services\dues.ts"'                     2
+b "powershell"          'powershell -c "Set-Content src/services/dues.ts x"'  2
+b "pwsh"                'pwsh -c "Copy-Item C:/tmp/a.ts src/services/dues.ts"' 2
+b "curl -o"             "curl -o src/services/dues.ts http://x"               2
+b "wget -O"             "wget -O src/services/dues.ts http://x"               2
+b "npm pkg set"         "npm pkg set dependencies.lodash=^4"                  2
+b "git stash pop"       "git stash pop"                                       2
+b "git reset --hard"    "git reset --hard HEAD~1"                             2
+b "git checkout ref --" "git checkout feature-x -- ."                         2
+b "tar -x"              "tar -xf /tmp/p.tar"                                  2
+b "unzip into root"     "unzip -o /tmp/p.zip -d src"                          2
+# Must stay ALLOWED (false-positive guards):
+b "plain read"          "grep -rn foo src"                                    0
+b "xargs read"          "grep -rl foo src | xargs wc -l"                      0
+b "git status"          "git status"                                          0
+b "git stash push"      "git stash"                                           0
+b "gate.sh itself"      "bash .claude/scripts/gate.sh show"                   0
+
+head_ "12d. filter-output never approves a compound command"
+for c in "npm test && git push --force origin main" \
+         "npm test && sed -i s/x/y/ src/services/dues.ts" \
+         'npm test $(rm -rf src)' \
+         "npm test \`touch src/x\`"; do
+  printf '{"tool_input":{"command":"%s"}}' "$(esc_json "$c")" \
+    | bash .claude/hooks/filter-output.sh 2>/dev/null | grep -q '^{}$' \
+    && pass "filter-output declines '$c'" \
+    || fail "filter-output declines '$c'" "{}" "a rewrite with allow"
+done
+
+head_ "12e. worktrees"
+set_gate '{"phase":"idle"}'
+mkdir -p .worktrees/feat/src/services .worktrees/feat/.claude/state
+printf '{"phase":"idle"}\n' > .worktrees/feat/.claude/state/gate.json
+g "in-repo worktree is guarded"          "$WORK/.worktrees/feat/src/services/dues.ts" 2
+# The worktree's own gate is what decides, not the main checkout's:
+set_gate '{"phase":"create","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
+g "main gate open does not open worktree" "$WORK/.worktrees/feat/src/services/dues.ts" 2
+
+head_ "12f. verify phase is read-only for source"
+set_gate '{"phase":"verify","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
+g "source edit in verify blocks"         "src/services/dues.ts"               2
+
+# ------------------------------------------------------------ 13. gate.sh CLI
+head_ "13. gate.sh refuses an answer that is not an answer"
 if [ -f .claude/scripts/gate.sh ]; then
   # One field poisoned at a time, the other left VALID. With both short, this
   # exits 1 whichever guard fires, so neutering either one leaves the suite
@@ -514,8 +648,8 @@ else
   fail "gate.sh is installed" "templates/common/scripts/gate.sh" "missing"
 fi
 
-# ------------------------------------------- 13. the documented workflow works
-head_ "13. The documented phase sequence actually opens and closes the gate"
+# ------------------------------------------- 14. the documented workflow works
+head_ "14. The documented phase sequence actually opens and closes the gate"
 # This is the test that was missing, and the gap it covers was real: the phase
 # skills said "update gate.json: set phase to create", which written literally
 # produces {"phase":"create"} and ERASES the problem/red notes. Every hook test
@@ -564,7 +698,7 @@ bash .claude/scripts/gate.sh advance create >/dev/null 2>&1 \
   && fail "advance into create still demands the notes" "exit 1" "exit 0" \
   || pass "advance into create still demands the notes"
 
-head_ "14. The skills only name gate.sh commands that exist"
+head_ "15. The skills only name gate.sh commands that exist"
 # Documentation drift in the other direction: a skill telling the agent to run
 # a subcommand that was renamed is a pipeline that stops at that phase.
 DRIFT=0

@@ -378,6 +378,23 @@ for t in templates/tiers/*/settings.json.tmpl; do
     || fail "$(basename "$(dirname "$t")"): bash-gate is NOT registered on Bash"
 done
 
+# The enforcement layer is not just the hooks. gate-check.sh refuses to edit
+# .claude/scripts/**, .claude/state/gate.json and .claude/settings.local.json
+# from inside a session regardless of phase (Slice 1) -- but a hook is only
+# ever a second door. permissions.deny is the FIRST one, enforced by Claude
+# Code itself before any hook runs, and it has to name the same three targets
+# or a session with hooks disabled some other way still has a plain door in.
+for t in templates/tiers/*/settings.json.tmpl; do
+  tier="$(basename "$(dirname "$t")")"
+  dmiss=""
+  for pat in './.claude/scripts/**' './.claude/state/gate.json' './.claude/settings.local.json'; do
+    grep -qF "Write($pat)" "$t" || dmiss="$dmiss Write($pat)"
+    grep -qF "Edit($pat)" "$t" || dmiss="$dmiss Edit($pat)"
+  done
+  [ -z "$dmiss" ] && pass "$tier: permissions.deny covers scripts/, gate.json and settings.local.json" \
+                  || fail "$tier: permissions.deny is missing:$dmiss"
+done
+
 # ------------------------------------------------ 12. nothing binary ships
 head_ "12. Nothing compiled or generated is tracked"
 # install.sh copies templates/skills/<name>/ wholesale, so a committed

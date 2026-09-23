@@ -65,6 +65,62 @@ case "$FILE" in
   node_modules/*|*/node_modules/*|vendor/*|*/vendor/*|.git/*|*/.git/*) exit 0 ;;
 esac
 
+# --- the enforcement layer itself -------------------------------------------
+# Checked BEFORE the ".claude/* is always writable" rule two blocks down, and
+# that ordering IS the fix: the blanket allow below exists so a session can
+# repair a broken install, but it also means the cheapest bypass of this whole
+# pipeline was never a parser gap -- it was `echo 'exit 0' >> .claude/hooks/
+# gate-check.sh`, which the old rule waved through unconditionally, gate phase
+# and all. hook-integrity.sh catches a change like that in CI, after the fact;
+# this stops it from landing at all.
+#
+# Exit 2 regardless of PHASE -- there is no phase in which a session should be
+# able to rewrite the thing that checks phases. What stays OUT of this list
+# matters as much as what is in it: .claude/agents, .claude/skills,
+# .claude/rules and .claude/agent-memory are deliberately left to the blanket
+# allow below, because disarming the pipeline requires touching an enforcement
+# FILE, not a prompt or a memory note, and locking those too would make a
+# session unable to fix its own agent memory or accumulate the project-memory
+# tier the rest of this design depends on.
+#
+# Case-INSENSITIVE, same reasoning as the guarded-root match below: `.CLAUDE/
+# Hooks/x.sh` is `.claude/hooks/x.sh` on Windows and macOS, and a check that
+# only matched the lowercase spelling would be exactly as decorative as the
+# root match was before it gained -i.
+#
+# Repair path, checked and found clear rather than assumed: configure.sh,
+# install.sh and `hook-integrity.sh --update` all run as ONE Bash tool call --
+# `bash configure.sh`, `bash install.sh --plan pro ...`, `bash .claude/scripts/
+# hook-integrity.sh --update` -- and bash-gate.sh extracts write targets from
+# the COMMAND LINE, never from what a script does once it is already running.
+# `bash` is not a program bash-gate parses targets out of, so none of these
+# three ever produces a target this case would see, protected or not. The
+# same is true of gate.sh itself, which is how it keeps writing gate.json
+# after this case starts refusing to.
+#
+# GATED ON `studio_guard`, i.e. on this file itself having no unresolved
+# template placeholder left in it. An unconfigured install's repair path is a
+# direct Edit of .claude/settings.json and the hook files -- configure.sh has
+# not run yet to regenerate them any other way -- so protecting this set
+# before there is a working gate behind it to protect would make a
+# half-finished install permanently unrepairable. Once configured, the second
+# `studio_guard` check further down (the one that BLOCKS on failure) can never
+# fire for these paths anyway, since this block will have already exited.
+if studio_guard "$SELF" >/dev/null 2>&1; then
+  case "${FILE,,}" in
+    .claude/hooks/*|.claude/scripts/*|.claude/state/gate.json|.claude/state/hooks.sha256|.claude/state/gate-log.tsv|.claude/settings.json|.claude/settings.local.json)
+      echo "BLOCKED: $FILE is part of the enforcement layer and cannot be edited" >&2
+      echo "  from inside a session, in any gate phase. This is not what the gate is" >&2
+      echo "  for -- it is what checks the gate." >&2
+      echo "  To change it on purpose: edit it outside this session (or with hooks" >&2
+      echo "  disabled), then run  bash .claude/scripts/hook-integrity.sh --update" >&2
+      echo "  and commit the manifest change in the same commit as the edit." >&2
+      studio_log_gate gate-check BLOCK - "$FILE" protected-enforcement-file
+      exit 2
+      ;;
+  esac
+fi
+
 # --- always writable --------------------------------------------------------
 # Checked BEFORE the configuration guard below, and that ordering is
 # load-bearing in both directions:

@@ -43,9 +43,14 @@ hash_of() {
 }
 
 # The files whose content IS the enforcement layer. settings.json is included
-# because unregistering a hook disables it exactly as thoroughly as emptying it.
+# because unregistering a hook disables it exactly as thoroughly as emptying
+# it. .claude/scripts/*.sh joined them for the same reason gate-check.sh now
+# refuses to edit that directory (Slice 1): gate.sh is what CONTENT the phase
+# floors live in (studio_validate_notes aside), and a deleted length check
+# there is invisible to every hook test that only ever calls gate.sh with
+# valid-shaped answers.
 TRACKED=""
-for f in .claude/hooks/*.sh .claude/settings.json; do
+for f in .claude/hooks/*.sh .claude/scripts/*.sh .claude/settings.json; do
   [ -f "$f" ] || continue
   TRACKED="$TRACKED $f"
 done
@@ -100,6 +105,26 @@ done < "$MANIFEST"
 for f in $TRACKED; do
   grep -qF "  $f" "$MANIFEST" || { echo "UNRECORDED  $f" >&2; RC=1; }
 done
+
+# settings.local.json is gitignored by design -- it is where a developer's own
+# overrides live, and this checksum manifest cannot cover a file that never
+# reaches the commit it would be checked against. So it gets a narrower,
+# content-based check instead of a hash: a "hooks" key here can register a
+# hook nobody reviewed, and disableAllHooks:true switches off every hook in
+# this file in one line. Neither needs to be a HASH MISMATCH to be dangerous;
+# a manifest entry could not name "the value it is allowed to hold" the way a
+# checksum names "the bytes it is allowed to be".
+LOCAL=".claude/settings.local.json"
+if [ -f "$LOCAL" ]; then
+  if grep -q '"disableAllHooks"' "$LOCAL" 2>/dev/null; then
+    echo "DANGEROUS  $LOCAL sets \"disableAllHooks\" — every hook in this repo is off." >&2
+    RC=1
+  fi
+  if grep -q '"hooks"' "$LOCAL" 2>/dev/null; then
+    echo "DANGEROUS  $LOCAL registers its own \"hooks\" — unreviewed and un-hashed." >&2
+    RC=1
+  fi
+fi
 
 if [ "$RC" != 0 ]; then
   echo >&2

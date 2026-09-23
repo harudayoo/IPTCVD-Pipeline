@@ -1227,11 +1227,39 @@ Two rules keep this from becoming a liability of its own:
 }
 ```
 
-Listing `bash-gate` above `filter-output` reads like an ordering, and it is not one: **all matching hooks run in parallel**, and Claude Code does not document which decision wins when one returns `deny` and another `allow`. Do not build a guarantee on that. What makes the pair safe is that their domains do not overlap — `filter-output` rewrites only the four exact commands from the profile (test, build, typecheck, dependency audit), and none of those produces a write target for `bash-gate` to refuse. That is a property you can test, and `test/hooks.sh` does; an ordering is not.
+Listing `bash-gate` above `filter-output` reads like an ordering, and it is not one: **all matching hooks run in parallel**. §10.8 below documents what actually happens when they disagree — it turns out to be safer than this section originally assumed — but the pair is still built to never need that safety net: `filter-output` rewrites only the four exact commands from the profile (test, build, typecheck, dependency audit), and none of those produces a write target for `bash-gate` to refuse. That is a property you can test, and `test/hooks.sh` does; an ordering is not, and neither is a cross-hook precedence rule you didn't design for.
 
 `chmod +x .claude/hooks/*.sh` — on macOS and Linux a non-executable hook fails rather than blocking. Confirm with `/hooks`.
 
 A note on permission modes: `bypassPermissions` defeats most of this. Use `acceptEdits` or `auto` for flow; keep `bypassPermissions` for throwaway sandboxes only.
+
+## 10.8 Two behaviors this design assumed, checked against the docs
+
+The gate-hardening audit (commit `f4917a6`) named two things this whole enforcement layer leans on without ever having confirmed them against Claude Code's actual documented behavior. Checked 2026-09-23 against `code.claude.com/docs/en/hooks` and `code.claude.com/docs/en/permissions`.
+
+**1. When hooks disagree, which decision wins?**
+
+Documented, and better than assumed. From the hooks reference, under exit-code handling:
+
+> "Exit 2 means a blocking error. On events that can block, exit 2 blocks whether or not you print JSON: even a JSON `permissionDecision` of `"allow"` can't override it."
+
+That resolves the same-hook case (a hook's own stderr-exit-2 beats its own JSON). The cross-hook case — `bash-gate.sh` exiting 2 while `filter-output.sh` in the same parallel batch returns `permissionDecision: "allow"` — is not spelled out as explicitly, but the permissions reference makes the general precedence unambiguous:
+
+> "Hook decisions don't bypass permission rules. Claude Code evaluates deny and ask rules regardless of what a PreToolUse hook returns: a matching deny rule blocks the call, and a matching ask rule still prompts even when the hook returned `"allow"` or `"ask"`. This preserves the deny-first precedence described in Manage permissions, including deny rules set in managed settings."
+
+Reading the two together: a block (exit 2, or a hook-issued `permissionDecision: "deny"`) is a veto that no other hook's `"allow"` in the same batch can undo, and neither can a hook override `permissions.deny`. So the original §10.7 claim — "does not document which decision wins" — was wrong; it does, and blocking wins. This is a stronger guarantee than §5 (slice 5 of the audit) needs, but the fix there stands anyway: `filter-output` rewriting `updatedInput` on a compound command it never inspected is still the wrong behavior in isolation — a passing `bash-gate` (because the write target sits outside every guarded root, e.g. `git push --force`) plus an "allow" from `filter-output` is a call that proceeds, filtered, with no gate ever having looked at the non-write part of the command. The precedence finding removes one failure mode (a `filter-output` allow can never *resurrect* a call `bash-gate` blocked); it does not remove the one slice 5 actually fixes (a compound command `bash-gate` never flagged in the first place, because none of its segments write to a guarded root, sailing through `filter-output`'s prefix match unexamined).
+
+**2. Are hook scripts and their registration live, or snapshotted at session start?**
+
+Split answer. The **registration** — which matcher runs which command, as declared in a settings file — is live:
+
+> "Direct edits to hooks in settings files are normally picked up automatically by the file watcher."
+
+The **script's own file contents** are not addressed by the docs at all; there is no statement about caching or re-reading. But a hook `command` is just a shell command Claude Code executes on each matching event — the same way it would execute any other command — and nothing in the docs describes an alternate path where script bytes are captured once and replayed. Treat this the way the audit did: a plain file, executed fresh, per call. That is also the only way `bash test/hooks.sh` and `bash test/mutation.sh` — which run the hook scripts directly, outside any Claude Code session — could ever be trusted to predict in-session behavior.
+
+The practical corollary for this repo: editing `.claude/hooks/*.sh` mid-session changes enforcement on the very next tool call, with no `/clear` or restart needed. That is also exactly why Slice 1 has to protect `.claude/hooks/*` and `.claude/scripts/*` as a *live* attack surface, not a cold-configuration one — a `sed -i` on a hook while the gate is closed takes effect before the next Edit.
+
+One more precedence detail worth recording here because it directly shapes Slice 1's design: MCP tools marked `requiresUserInteraction`, and connector tools an organization sets to `ask`, **still prompt even when a hook returns `"allow"`** — another instance of the same deny/ask-first rule. Nothing analogous exists for Bash or Edit/Write; a hook's `"allow"` there is not vetoed by anything except a `deny`/`ask` permission rule that happens to also match.
 
 ---
 

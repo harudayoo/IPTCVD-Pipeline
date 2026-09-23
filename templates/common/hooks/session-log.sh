@@ -75,4 +75,32 @@ printf '%s\t%s\t%s\t%s\n' \
   "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)" \
   "$SOURCE" "$PHASE" "${SESSION:0:8}" >> "$LOG" 2>/dev/null || true
 
+# --- watch the enforcement layer's own doors --------------------------------
+#
+# hook-integrity.sh already runs in CI, which catches a tampered hook after it
+# is already committed and, on a branch nobody is watching, after it has
+# already run. This runs the same check here, at the START of every session,
+# so the same drift is loud in THIS session's own transcript before a single
+# Edit lands under it.
+#
+# Fails OPEN, same as everything else in this hook: a check that could block a
+# session from starting would itself become the next thing worth disarming,
+# and it cannot block anyway -- SessionStart has nothing to block.
+#
+# stdout is how it reaches the model: SessionStart is one of the few events
+# where Claude Code adds plain-text stdout to context as something Claude can
+# see and act on, rather than only logging it for a human to find later.
+if [ -f .claude/scripts/hook-integrity.sh ]; then
+  if ! INTEGRITY_OUT=$(bash .claude/scripts/hook-integrity.sh 2>&1); then
+    echo "INTEGRITY FAIL: the enforcement layer differs from what was last reviewed."
+    printf '%s\n' "$INTEGRITY_OUT" | sed 's/^/  /'
+    echo "If this change is intended: bash .claude/scripts/hook-integrity.sh --update"
+    echo "If it is not: revert the file(s) named above before trusting any gate here."
+    { printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)" \
+        session-log "INTEGRITY FAIL" "$PHASE" .claude/scripts/hook-integrity.sh \
+        "hooks-differ-from-manifest" >> "$STATE/gate-log.tsv"; } 2>/dev/null || true
+  fi
+fi
+
 exit 0

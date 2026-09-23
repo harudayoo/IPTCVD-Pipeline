@@ -31,6 +31,8 @@
 #   git checkout/restore/apply/am/revert/mv/rm/clean,  patch
 #   npm|pnpm|yarn add,  composer require   (the manifest they rewrite)
 #   interpreter writes naming a guarded path
+#   chmod/chown/attrib/icacls    a permission change on a protected file is a
+#                                step toward editing it without detection
 #
 # Not covered, and honest about it: a write performed by a script invoked by
 # path, or inside an editor session. Those remain the Edit/Write tools' job.
@@ -245,6 +247,38 @@ while IFS= read -r seg; do
       for a in "$@"; do
         case "$a" in -*) continue ;; esac
         add_target "$a"
+      done
+      ;;
+    chmod|chown)
+      # A permission or ownership change is a step toward tampering with a
+      # protected file undetected -- chmod 644 a hook so its content can be
+      # sed'd without -x ever flagging it missing, or chown it away from the
+      # account CI runs integrity checks as. MODE/OWNER is the first non-flag
+      # operand and is never a path; everything after it is.
+      taken=0
+      for a in "$@"; do
+        case "$a" in -*) continue ;; esac
+        if [ "$taken" = "0" ]; then taken=1; continue; fi
+        add_target "$a"
+      done
+      ;;
+    attrib|icacls)
+      # Windows analogues of chmod/chown. attrib's +R/-R/+A/-A/+S/-S/+H/-H are
+      # attribute flags, never paths; icacls's own flags and ACE strings
+      # (/grant, /reset, Users:F) all start with a leading `/` when they are
+      # flags, so a bare non-flag operand is the path being touched. Only the
+      # FIRST such operand for icacls -- an ACE string like `Users:F` is not a
+      # path and would otherwise be added as a spurious, harmless-but-noisy
+      # target.
+      taken=0
+      for a in "$@"; do
+        case "$a" in +[RASHIO]|-[RASHIO]|/*) continue ;; esac
+        if [ "$prog" = "icacls" ]; then
+          [ "$taken" = "0" ] && add_target "$a"
+          taken=1
+        else
+          add_target "$a"
+        fi
       done
       ;;
     dd)

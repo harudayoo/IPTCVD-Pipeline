@@ -8,7 +8,10 @@
       "Write(./.env)", "Write(./.env.*)",
       "Bash(rm -rf /*)", "Bash(git push --force*)", "Bash(*DROP TABLE*)",
       "Write(./.claude/hooks/**)", "Edit(./.claude/hooks/**)",
+      "Write(./.claude/scripts/**)", "Edit(./.claude/scripts/**)",
       "Write(./.claude/settings.json)", "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.local.json)", "Edit(./.claude/settings.local.json)",
+      "Write(./.claude/state/gate.json)", "Edit(./.claude/state/gate.json)",
       "Bash(git push -f*)", "Bash(git push --force-with-lease*)", "Bash(chmod -x .claude/hooks/*)"
     ],
     "allow": [
@@ -19,7 +22,7 @@
     "PreToolUse": [
       { "matcher": "Edit|Write",
         "hooks": [{ "type": "command", "command": ".claude/hooks/gate-check.sh" }] },
-      { "_comment": "Without bash-gate the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write. This list is NOT an execution order: Claude Code runs all matching hooks in parallel and does not document which decision wins when one returns deny and another allow. Nothing here depends on that. The two are safe together because their domains are disjoint -- filter-output rewrites only the four profile commands, none of which yields a write target for bash-gate to refuse -- which is a property, and test/hooks.sh section 10b tests it.",
+      { "_comment": "Without bash-gate the plan gate is one `sed -i` away from irrelevant, because gate-check.sh only ever sees Edit and Write. This list is NOT an execution order: Claude Code runs all matching hooks in parallel. Docs confirm (see DESIGN-RATIONALE.md §10.8) that a block always wins -- exit 2, or a hook’s own permissionDecision deny, cannot be overridden by another hook’s allow in the same batch, and no hook allow overrides a permissions.deny rule either. Nothing here depends on that anyway: the two are safe together because their domains are disjoint -- filter-output rewrites only the four profile commands, none of which yields a write target for bash-gate to refuse -- which is a property, and test/hooks.sh section 10b tests it.",
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": ".claude/hooks/bash-gate.sh" },
