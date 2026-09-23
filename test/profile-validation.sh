@@ -165,6 +165,57 @@ check "audit chained with &&"             'Dependency audit command'    'compose
 check "several source roots"              'Source roots'                'src,lib'                      accept
 check "nested shared surfaces"            'Shared surfaces'             'src/components,src/services'  accept
 check "an ordinary test root"             'Test root'                   'tests'                        accept
+# A directory that does not exist yet is a WARNING, not a rejection -- the
+# profile may be filled in before the directory is created, or the field may
+# simply be wrong, and either way configure.sh cannot tell which without
+# refusing a legitimate not-yet-created root.
+check "a source root that does not exist yet"  'Source roots'  'does-not-exist-anywhere'  accept
+
+head_ "Root safety: normalise, escape, still guard"
+# Tested against the actual compiled hook, not just configure.sh's exit code --
+# the audited bugs both had configure.sh exiting 0 the whole time while the
+# resulting regex silently matched nothing, or matched too much.
+check_root_guards() {  # check_root_guards <label> <declared-root> <path-that-must-block>
+  local label="$1" declared="$2" probe="$3"
+  N=$((N + 1))
+  local d="$W/case$N"
+  cp -a "$FIX" "$d" || { bad "$label" "could not copy the fixture"; return; }
+  if ! setfield "$d/docs/setup/PROFILE.md" 'Source roots' "$declared"; then
+    bad "$label" "could not set the field"; rm -rf "$d"; return
+  fi
+  if ! bash "$SRC/configure.sh" --target "$d" >"$d/out.log" 2>&1; then
+    bad "$label" "configure.sh rejected it: $(grep -m1 -i error "$d/out.log" || echo '(no error line)')"
+    rm -rf "$d"; return
+  fi
+  local rc
+  rc=$(cd "$d" && printf '{"phase":"idle"}' > .claude/state/gate.json \
+       && printf '{"tool_input":{"file_path":"%s"}}' "$probe" | bash .claude/hooks/gate-check.sh >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] && ok "$label" \
+    || bad "$label" "the declared root did not actually guard '$probe' (gate-check exit $rc)"
+  rm -rf "$d"
+}
+# check_root_guards_never <label> <declared-root> <path-that-must-STAY-open> --
+# the mirror image: an escape that undershoots (still leaves a metacharacter
+# live) makes the root guard MORE than its own name, which is the fail-open
+# direction for everything beside it that happens to share a character.
+check_root_never_guards() {
+  local label="$1" declared="$2" probe="$3"
+  N=$((N + 1))
+  local d="$W/case$N"
+  cp -a "$FIX" "$d" || { bad "$label" "could not copy the fixture"; return; }
+  setfield "$d/docs/setup/PROFILE.md" 'Source roots' "$declared" >/dev/null 2>&1
+  bash "$SRC/configure.sh" --target "$d" >"$d/out.log" 2>&1
+  local rc
+  rc=$(cd "$d" && printf '{"phase":"idle"}' > .claude/state/gate.json \
+       && printf '{"tool_input":{"file_path":"%s"}}' "$probe" | bash .claude/hooks/gate-check.sh >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] && ok "$label" \
+    || bad "$label" "the escaped root wrongly guarded '$probe' too (gate-check exit $rc)"
+  rm -rf "$d"
+}
+check_root_guards      "a backslash root is normalised and still guards"  'Web\API'  'Web/API/probe.ts'
+check_root_guards      "a dotted root guards its own directory"          'Web.Api'  'Web.Api/probe.ts'
+check_root_never_guards "the dot in a dotted root is literal, not a wildcard, so it never guards a look-alike" \
+                                                                          'Web.Api'  'WebXApi/probe.ts'
 
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && exit 1

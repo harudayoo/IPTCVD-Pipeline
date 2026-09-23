@@ -115,13 +115,26 @@ SOURCE_ROOTS="$(field 'Source roots')"
 FRONTEND_ROOT="$(field 'Front-end root')"
 TEST_ROOT="$(field 'Test root')"
 SHARED_SURFACES="$(field 'Shared surfaces')"
+EXTRA_TEST_PATTERNS_RAW="$(field 'Extra test patterns')"
 TOKEN_FILE="$(field 'Design token file')"
 HAS_UI="$(field 'Has UI')"
+
+# Normalise backslashes to forward slashes BEFORE anything treats these as
+# directory names. Tested: "WebCoreApi\Website" passed the validation below
+# unchanged and compiled into "^(WebCoreApi\Website)/" -- an UNESCAPED
+# backslash in an ERE either errors or eats the character after it, so the
+# root matched nothing and was silently unguarded. Every affected field is a
+# comma-separated list of repo-relative paths, so a global backslash-to-slash
+# swap is safe: nothing legitimate in any of them needs one.
+SOURCE_ROOTS=$(printf '%s' "$SOURCE_ROOTS" | tr '\\' '/')
+FRONTEND_ROOT=$(printf '%s' "$FRONTEND_ROOT" | tr '\\' '/')
+TEST_ROOT=$(printf '%s' "$TEST_ROOT" | tr '\\' '/')
+SHARED_SURFACES=$(printf '%s' "$SHARED_SURFACES" | tr '\\' '/')
 
 [ -n "$TEST_COMMAND" ]  || die "could not read 'Test command' from the profile"
 
 # Refuse a row whose value contains a pipe BEFORE anything is substituted.
-for _lbl in "Dev command" "Test command (non-watching)" "Single-test command"             "Format command (fixes)" "Type-check command" "Build command"             "Dependency audit command" "Source roots" "Front-end root" "Test root"             "Shared surfaces" "Design token file"; do
+for _lbl in "Dev command" "Test command (non-watching)" "Single-test command"             "Format command (fixes)" "Type-check command" "Build command"             "Dependency audit command" "Source roots" "Front-end root" "Test root"             "Shared surfaces" "Extra test patterns" "Design token file"; do
   if _row=$(check_row_shape "$_lbl"); then :; else
     c_red "error: the '$_lbl' row has more cells than a markdown table row can hold."
     c_dim "  row: $_row"
@@ -191,14 +204,18 @@ done
 # `&&` stays legal: install.sh legitimately builds "composer audit && npm audit",
 # and an ampersand inside a case pattern is an ordinary literal.
 for _pair in "Test command (non-watching)|$TEST_COMMAND" "Build command|$BUILD_COMMAND" \
-             "Dependency audit command|$DEPENDENCY_AUDIT_COMMAND"; do
+             "Dependency audit command|$DEPENDENCY_AUDIT_COMMAND" \
+             "Extra test patterns|$EXTRA_TEST_PATTERNS_RAW"; do
   _label="${_pair%%|*}"; _val="${_pair#*|}"
-  case "$_val" in ""|NEEDS_REVIEW|true) continue ;; esac
+  case "$_val" in ""|NEEDS_REVIEW|true|n/a) continue ;; esac
   case "$_val" in
     *'('*|*')'*|*\\*)
       _die_val "$_label" "$_val" "a parenthesis or a backslash, which breaks a case pattern" ;;
   esac
   # A lone `|` breaks the pattern; `||` is shell chaining and is no better here.
+  # "Extra test patterns" is comma-separated and joined with `|` by configure.sh
+  # ITSELF when building the substitution -- a `|` typed by hand here would
+  # double up and end the pattern early either way.
   case "$_val" in
     *'|'*) _die_val "$_label" "$_val" "a pipe, which ends the case pattern early" ;;
   esac
@@ -217,7 +234,8 @@ _NL=$'\n'; _CR=$'\r'
 for _pair in "Format command (fixes)|$FORMAT_COMMAND" "Type-check command|$TYPECHECK_COMMAND" \
              "Test command (non-watching)|$TEST_COMMAND" "Build command|$BUILD_COMMAND" \
              "Dependency audit command|$DEPENDENCY_AUDIT_COMMAND" "Source roots|$SOURCE_ROOTS" \
-             "Test root|$TEST_ROOT" "Shared surfaces|$SHARED_SURFACES"; do
+             "Test root|$TEST_ROOT" "Shared surfaces|$SHARED_SURFACES" \
+             "Extra test patterns|$EXTRA_TEST_PATTERNS_RAW"; do
   _label="${_pair%%|*}"; _val="${_pair#*|}"
   case "$_val" in
     *"$_NL"*|*"$_CR"*)
@@ -245,6 +263,13 @@ done
 
 [ -n "$SOURCE_ROOTS" ]  || die "could not read 'Source roots' from the profile"
 
+# ERE-escape ONE path segment. Tested: a root of "Web.Api" compiled unescaped
+# into "^(Web.Api)/", where the bare "." matches ANY character -- so it also
+# matched "WebXApi", "Web Api", or any other single-character substitution,
+# silently WIDENING the guard rather than narrowing it. A directory name is
+# not a pattern; every regex metacharacter in it must mean itself.
+_ere_escape() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
+
 # Source roots -> an ERE the hooks can grep with:  "app,src"  ->  "^(app|src)(/|$)"
 #
 # (/|$) rather than a bare trailing /: a BARE root target -- `cp /tmp/a.ts src`,
@@ -252,7 +277,21 @@ done
 # target collapsed to exactly "src" with nothing after it -- named the root
 # with no trailing slash at all, and "^(src)/" matched none of it. Measured:
 # `cp /tmp/a.ts src` walked straight past a closed gate under the old pattern.
-SOURCE_ROOTS_REGEX="^($(printf '%s' "$SOURCE_ROOTS" | tr -d ' ' | tr ',' '|'))(/|$)"
+#
+# Built segment by segment through _ere_escape, not a blind tr/join: a raw
+# `tr ',' '|'` interpolates each root's own text directly into the regex, so
+# any metacharacter IN the name (., +, (, a stray |) changes what the pattern
+# matches instead of naming the directory literally.
+SOURCE_ROOTS_ESC=""
+OLDIFS="$IFS"; IFS=','
+for _r in $SOURCE_ROOTS; do
+  _r="$(printf '%s' "$_r" | tr -d ' ')"
+  [ -n "$_r" ] || continue
+  [ -d "$TARGET/$_r" ] || c_yel "  warning: declared source root '$_r' does not exist as a directory under $TARGET."
+  SOURCE_ROOTS_ESC="${SOURCE_ROOTS_ESC:+$SOURCE_ROOTS_ESC|}$(_ere_escape "$_r")"
+done
+IFS="$OLDIFS"
+SOURCE_ROOTS_REGEX="^($SOURCE_ROOTS_ESC)(/|$)"
 
 # Shared surfaces -> an ERE the gate can grep with:
 #   "src/components,src/services"  ->  "^(src/components|src/services)/"
@@ -279,12 +318,45 @@ for _r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' '); do
       ;;
   esac
 done
+if [ -n "$TEST_ROOT" ] && [ ! -d "$TARGET/$TEST_ROOT" ]; then
+  c_yel "  warning: declared test root '$TEST_ROOT' does not exist as a directory under $TARGET."
+fi
 
 if [ -n "$SHARED_SURFACES" ]; then
-  SHARED_SURFACE_REGEX="^($(printf '%s' "$SHARED_SURFACES" | tr -d ' ' | tr ',' '|'))/"
+  SHARED_SURFACES_ESC=""
+  OLDIFS="$IFS"; IFS=','
+  for _s in $SHARED_SURFACES; do
+    _s="$(printf '%s' "$_s" | tr -d ' ')"
+    [ -n "$_s" ] || continue
+    [ -d "$TARGET/$_s" ] || c_yel "  warning: declared shared surface '$_s' does not exist as a directory under $TARGET."
+    SHARED_SURFACES_ESC="${SHARED_SURFACES_ESC:+$SHARED_SURFACES_ESC|}$(_ere_escape "$_s")"
+  done
+  IFS="$OLDIFS"
+  SHARED_SURFACE_REGEX="^($SHARED_SURFACES_ESC)/"
 else
   SHARED_SURFACE_REGEX=""
 fi
+
+# Extra test-filename shapes -> `|pattern1|pattern2`, appended directly inside
+# the `case` statement's own pattern list in gate-check.sh and gate.sh, right
+# before the closing paren of the built-in shapes. Unlike source roots, these
+# are GLOB patterns on purpose (`*_spec.rb`), so they are NOT ERE-escaped --
+# only the case-pattern-breaking characters (parenthesis, backslash, pipe)
+# were already refused above, by the same "MATCHED" validation every other
+# case-pattern field goes through.
+EXTRA_TEST_PATTERNS=""
+case "$EXTRA_TEST_PATTERNS_RAW" in
+  ""|NEEDS_REVIEW|n/a) ;;
+  *)
+    OLDIFS="$IFS"; IFS=','
+    for _t in $EXTRA_TEST_PATTERNS_RAW; do
+      _t="$(printf '%s' "$_t" | tr -d ' ')"
+      [ -n "$_t" ] || continue
+      EXTRA_TEST_PATTERNS="${EXTRA_TEST_PATTERNS}|${_t}"
+    done
+    IFS="$OLDIFS"
+    ;;
+esac
 
 # Globs for the rules
 BACKEND_GLOB="${SOURCE_ROOTS%%,*}/**/*"
@@ -345,6 +417,8 @@ subst() {
     "SOURCE_ROOTS_REGEX=$SOURCE_ROOTS_REGEX" \
     "SHARED_SURFACES=$SHARED_SURFACES" \
     "SHARED_SURFACE_REGEX=$SHARED_SURFACE_REGEX" \
+    "EXTRA_TEST_PATTERNS_RAW=$EXTRA_TEST_PATTERNS_RAW" \
+    "EXTRA_TEST_PATTERNS=$EXTRA_TEST_PATTERNS" \
     "FRONTEND_ROOT=$FRONTEND_ROOT" \
     "TEST_ROOT=$TEST_ROOT" \
     "TOKEN_FILE=$TOKEN_FILE" \

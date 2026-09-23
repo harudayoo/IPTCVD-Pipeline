@@ -71,10 +71,31 @@ trap restore EXIT
 
 head_ "1. Gate blocks source edits outside the create phase"
 printf '{"phase":"idle","feature":null,"slug":null,"approved":[]}\n' > "$GATE"
-SRC_FILE="$(grep -oE '\^\(([^)]*)\)' .claude/hooks/gate-check.sh | head -1 \
-            | sed 's/^\^(//; s/)$//' | cut -d'|' -f1)/probe.ts"
+ALL_ROOTS="$(grep -oE '\^\(([^)]*)\)' .claude/hooks/gate-check.sh | head -1 \
+            | sed 's/^\^(//; s/)$//')"
+SRC_FILE="$(printf '%s' "$ALL_ROOTS" | cut -d'|' -f1)/probe.ts"
 [ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"$SRC_FILE\"}}")" = 2 ] \
   && pass "blocks $SRC_FILE" || fail "blocks $SRC_FILE"
+
+# EVERY configured root, not only the first -- a root that compiled wrong
+# (an unescaped metacharacter, a backslash configure.sh's own guard missed,
+# a typo against the actual directory) reports success on every check above,
+# because they all probe the SAME first root. Tested: "WebCoreApi\Website"
+# passed every other check in this file and still let a write through.
+head_ "1c. Every declared source root actually guards"
+OLDIFS="$IFS"; IFS='|'
+for _root in $ALL_ROOTS; do
+  IFS="$OLDIFS"
+  [ -n "$_root" ] || continue
+  PROBE_FILE="$_root/__probe__.x"
+  if [ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"$PROBE_FILE\"}}")" = 2 ]; then
+    pass "root '$_root' guards $PROBE_FILE"
+  else
+    fail "root '$_root' does NOT block $PROBE_FILE — check docs/setup/PROFILE.md for a typo, a backslash, or an unescaped regex character in this root's name"
+  fi
+  IFS='|'
+done
+IFS="$OLDIFS"
 # The ABSOLUTE spelling is the one Claude Code really sends. A ^-anchored
 # source-root regex does not match it, so this suite once passed while the
 # gate was inert in production: it fed the one relative spelling that happened
