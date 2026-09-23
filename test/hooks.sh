@@ -742,7 +742,7 @@ step "test: source blocked"              2 test
 step "create: source OPEN"               0 create \
      --problem "National finance summed every chapter's dues into the total" \
      --red     "DuesTest::national_excludes_chapter fails: expected 0, got 41250"
-step "advance verify: source still OPEN" 0 advance verify
+step "advance verify: source now blocked"  2 advance verify
 step "advance document: source blocked"  2 advance document
 step "idle: re-armed for the next slice" 2 idle
 

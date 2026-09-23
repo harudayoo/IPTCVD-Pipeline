@@ -331,8 +331,14 @@ VAULT=${VAULT%$'\r'}; REUSE=${REUSE%$'\r'}; DEPS=${DEPS%$'\r'}
 [ -z "${PHASE:-}" ] && PHASE="idle"
 
 # --- gate 1: phase ----------------------------------------------------------
+# VERIFY is read-only for source. The block message below always said "only
+# allowed in 'create'" -- this case just never matched what it claimed, and
+# accepted verify too. The fix loop is now: `advance create` to reopen source,
+# fix, then `advance verify` again, which slice 4's red-cmd re-run and re-hash
+# both re-check on that exact transition. Each round trip shows up in
+# gate-log.tsv, which is useful data on its own.
 case "$PHASE" in
-  create|verify) ;;
+  create) ;;
   *)
     echo "BLOCKED: gate phase is '$PHASE'. Source edits are only allowed in 'create'." >&2
     echo "  file: $FILE" >&2

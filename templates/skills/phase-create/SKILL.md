@@ -50,8 +50,9 @@ restating them — a phase change is not a new plan:
 bash .claude/scripts/gate.sh advance verify
 ```
 
-Source stays writable through verify, so review findings can be fixed without
-re-opening the gate.
+Source is **read-only** once verify starts — gate-check.sh refuses an Edit in
+any phase but `create`. A review finding worth fixing re-opens source with
+`gate.sh advance create`, not a direct edit made mid-verify.
 
 Then append `create` to `approved` in `.claude/state/gate.json`.
 

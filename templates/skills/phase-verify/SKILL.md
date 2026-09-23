@@ -17,7 +17,10 @@ find five different things.
 ## Dispatch
 
 Run these **in parallel from a single dispatch**. All are read-only; none may
-fix anything in this turn.
+fix anything in this turn. This is enforced, not only agreed: gate-check.sh
+refuses a source edit while the gate phase is `verify`, the same as it does
+for every phase except `create`. A finding worth fixing goes back through
+CREATE — see "Where findings go" below — not through a source edit made here.
 
 | Agent | Lens | Skip when |
 |---|---|---|
@@ -53,6 +56,12 @@ This phase closes when:
 Findings that become work re-enter at **TEST**, not at CREATE. A bug fix gets a
 failing test first — that is the same rule the whole pipeline is built on, and
 the verify gate is exactly where people are most tempted to skip it.
+
+Once the new test is red and recorded, reopen source with
+`bash .claude/scripts/gate.sh advance create`, fix it, then
+`bash .claude/scripts/gate.sh advance verify` again — which re-runs the
+recorded red command and re-hashes its files, so this round trip is checked
+the same way the first one was. Each trip through shows up in `gate-log.tsv`.
 
 Then close the gate to source:
 
