@@ -777,6 +777,104 @@ done
 [ -z "$MISSING_TOOL" ] && pass "every phase skill may run gate.sh" \
   || fail "every phase skill may run gate.sh" "allowed-tools carries gate.sh" "missing in:$MISSING_TOOL"
 
+# ------------------------------------------- 16. --red is evidence, not a sentence
+head_ "16. gate.sh test --red-cmd · evidence, not a claim"
+set_gate '{"phase":"idle"}'
+rm -f .claude/state/gate-log.tsv
+bash .claude/scripts/gate.sh test --red-cmd "true" >/dev/null 2>&1 \
+  && fail "refuses a red-cmd that exits 0" "exit 1" "exit 0" \
+  || pass "refuses a red-cmd that exits 0"
+bash .claude/scripts/gate.sh test --red-cmd "false" >/dev/null 2>&1 \
+  && fail "refuses a red-cmd whose output carries no assertion" "exit 1" "exit 0" \
+  || pass "refuses a red-cmd whose output carries no assertion"
+
+cat > "$WORK/src/services/dues.test.ts" <<'EOF'
+// placeholder red test
+EOF
+cat > "$WORK/fake-runner.sh" <<'RUNNER'
+#!/usr/bin/env bash
+echo "FAIL  src/services/dues.test.ts"
+echo "Tests: 1 failed, 0 passed"
+exit 1
+RUNNER
+chmod +x "$WORK/fake-runner.sh"
+OUT=$(bash .claude/scripts/gate.sh test --red-cmd "bash fake-runner.sh" 2>&1); RC=$?
+[ "$RC" = 0 ] && pass "records a real red test" || fail "records a real red test" "exit 0" "exit $RC: $OUT"
+grep -q '"red_files"' .claude/state/gate.json \
+  && pass "red_files is recorded" || fail "red_files is recorded" "a red_files key" "$(cat .claude/state/gate.json)"
+grep -q "dues.test.ts" .claude/state/gate.json \
+  && pass "the red file is named in the record" || fail "the red file is named" "dues.test.ts" "$(cat .claude/state/gate.json)"
+grep -q "RED" .claude/state/gate-log.tsv 2>/dev/null \
+  && pass "the red command is logged" || fail "the red command is logged" "a RED row" "none"
+
+bash .claude/scripts/gate.sh create --problem "National finance summed every chapter's dues into the total" >/dev/null 2>&1
+RC=$?
+[ "$RC" = 0 ] && pass "create without --red accepts the recorded red" \
+              || fail "create without --red accepts the recorded red" "exit 0" "exit $RC"
+g "source is open in create"                    "src/services/dues.ts"       0
+g "the recorded red test is frozen during create" "src/services/dues.test.ts" 2
+
+grep -q "$(printf 'gate.sh\tOPEN\tcreate\t-\tred-recorded')" .claude/state/gate-log.tsv 2>/dev/null \
+  && pass "logs red-recorded when --red is auto-filled from a record" \
+  || fail "logs red-recorded when --red is auto-filled from a record" "a red-recorded OPEN row" "$(grep OPEN .claude/state/gate-log.tsv 2>/dev/null | tail -1)"
+
+bash .claude/scripts/gate.sh advance verify >/dev/null 2>&1
+RC=$?
+[ "$RC" = 1 ] && pass "advance verify refuses while the red command still fails" \
+              || fail "advance verify refuses while the red command still fails" "exit 1" "exit $RC"
+
+cat > "$WORK/fake-runner.sh" <<'RUNNER'
+#!/usr/bin/env bash
+echo "Tests: 1 passed"
+exit 0
+RUNNER
+bash .claude/scripts/gate.sh advance verify >/dev/null 2>&1
+RC=$?
+[ "$RC" = 0 ] && pass "advance verify succeeds once the red command passes" \
+              || fail "advance verify succeeds once the red command passes" "exit 0" "exit $RC"
+g "the test file is no longer frozen once phase is verify" "src/services/dues.test.ts" 0
+
+head_ "16b. advance verify re-hashes red_files, not only the re-run"
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+cat > "$WORK/fake-runner2.sh" <<'RUNNER'
+#!/usr/bin/env bash
+echo "FAIL  src/services/dues.test.ts"
+echo "Tests: 1 failed, 0 passed"
+exit 1
+RUNNER
+chmod +x "$WORK/fake-runner2.sh"
+bash .claude/scripts/gate.sh test --red-cmd "bash fake-runner2.sh" >/dev/null 2>&1
+bash .claude/scripts/gate.sh create --problem "National finance summed every chapter's dues into the total" >/dev/null 2>&1
+# The command now passes, isolating the RE-HASH check from the re-run check:
+# a red-cmd that passes again is not, on its own, proof the frozen file itself
+# was not also weakened by some other means.
+cat > "$WORK/fake-runner2.sh" <<'RUNNER'
+#!/usr/bin/env bash
+echo "Tests: 1 passed"
+exit 0
+RUNNER
+echo "// weakened outside the freeze" >> "$WORK/src/services/dues.test.ts"
+bash .claude/scripts/gate.sh advance verify >/dev/null 2>&1
+RC=$?
+[ "$RC" = 1 ] && pass "advance verify refuses when a red file's hash changed" \
+              || fail "advance verify refuses when a red file's hash changed" "exit 1" "exit $RC"
+
+rm -f "$WORK/src/services/dues.test.ts" "$WORK/fake-runner.sh" "$WORK/fake-runner2.sh"
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+
+head_ "16c. gate.sh logs which KIND of --red opened the gate"
+bash .claude/scripts/gate.sh create --problem "National finance summed every chapter's dues into the total" --red "n/a: pure token rename, no behaviour" >/dev/null 2>&1
+grep -q "$(printf 'gate.sh\tOPEN\tcreate\t-\tred-na')" .claude/state/gate-log.tsv 2>/dev/null \
+  && pass "logs red-na for an honest n/a" \
+  || fail "logs red-na for an honest n/a" "a red-na OPEN row" "$(grep OPEN .claude/state/gate-log.tsv 2>/dev/null | tail -1)"
+
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+bash .claude/scripts/gate.sh create --problem "National finance summed every chapter's dues into the total" --red "DuesTest::national_excludes_chapter fails: expected 0 got 41250" >/dev/null 2>&1
+grep -q "$(printf 'gate.sh\tOPEN\tcreate\t-\tred-manual')" .claude/state/gate-log.tsv 2>/dev/null \
+  && pass "logs red-manual for a typed sentence with no record behind it" \
+  || fail "logs red-manual for a typed sentence with no record behind it" "a red-manual OPEN row" "$(grep OPEN .claude/state/gate-log.tsv 2>/dev/null | tail -1)"
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && { printf 'A guard that fails its own bypass suite is not a guard.\n'; exit 1; }
 printf 'Every bypass shape reaches the same verdict as the plain one.\n'

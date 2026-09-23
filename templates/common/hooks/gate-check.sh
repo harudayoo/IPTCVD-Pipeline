@@ -7,8 +7,12 @@
 # everything outside them, and for docs/tests/.claude/*.md regardless of phase,
 # so writing the plan itself is never blocked by the gate meant to require it.
 #
-# FOUR gates, in the order they fire:
+# FIVE gates, in the order they fire:
 #
+#   0. FROZEN      -- a test file named in a recorded `red_files` list cannot
+#                     be edited during 'create'. Checked ahead of the
+#                     test-file allow rules below, which would otherwise let
+#                     a red test be weakened until it passes unnoticed.
 #   1. PHASE       -- a plan has been approved and the pipeline is in 'create'.
 #   2. CONTENT     -- that plan carries a `problem` and a `red` note. A boolean
 #                     gate certifies only that a plan EXISTS, never what it said,
@@ -49,6 +53,7 @@ fi
 PROTECTED="{{SOURCE_ROOTS_REGEX}}"
 TEST_ROOT="{{TEST_ROOT}}"
 SHARED_SURFACE="{{SHARED_SURFACE_REGEX}}"
+GATE=".claude/state/gate.json"
 
 # Dependency manifests are guarded too. Ecosystem-independent, and matched
 # EXACTLY at the repo root so a downloaded package's own manifest under a
@@ -134,6 +139,52 @@ fi
 # So: allow the repair path unconditionally, then refuse to judge anything else
 # until the hook knows what it is guarding.
 #
+# --- red evidence is frozen during CREATE -----------------------------------
+# Checked BEFORE both test-allow rules below (location and filename), because
+# either one would otherwise wave a frozen file straight through: a recorded
+# red test is exactly as freezable inside TEST_ROOT as it is beside its
+# source. `gate.sh test --red-cmd` runs the failing test and records which
+# file(s) produced it; weakening that test until it passes is not the same as
+# making the code correct, and a direct Edit is the one door `advance
+# verify`'s re-run cannot see coming -- it only re-checks at the NEXT
+# transition, by which point the edit already happened.
+#
+# One grep, not a parse, before paying for anything more: a repo that has
+# never run `test --red-cmd` has no "red_files" key at all, and pays nothing
+# extra on every test-file edit -- the common case during CREATE, which is
+# most of them.
+if [ -f "$GATE" ] && grep -q '"red_files"' "$GATE" 2>/dev/null; then
+  case "$FILE" in
+    docs/*|.claude/*|*.md) ;;   # never source, never frozen -- skip the rest
+    *)
+      RF_PHASE=""
+      if command -v jq >/dev/null 2>&1; then
+        RF_PHASE=$(jq -r '.phase // ""' "$GATE" 2>/dev/null) || RF_PHASE=""
+      fi
+      [ -n "$RF_PHASE" ] || RF_PHASE=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' "$GATE" 2>/dev/null \
+        | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//')
+      if [ "$RF_PHASE" = "create" ]; then
+        RED_FILES_RAW=""
+        if command -v jq >/dev/null 2>&1; then
+          RED_FILES_RAW=$(jq -r '.red_files // ""' "$GATE" 2>/dev/null) || RED_FILES_RAW=""
+        fi
+        [ -n "$RED_FILES_RAW" ] || RED_FILES_RAW=$(grep -o '"red_files"[[:space:]]*:[[:space:]]*"[^"]*"' "$GATE" 2>/dev/null \
+          | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//')
+        case ",$RED_FILES_RAW," in
+          *",$FILE,"*)
+            echo "BLOCKED: $FILE is the recorded red evidence for this slice, frozen until" >&2
+            echo "  verify. Weakening a failing test until it passes is not the same as" >&2
+            echo "  making the code correct -- advance to verify, which re-runs the" >&2
+            echo "  original command, instead of editing the test that proves it." >&2
+            studio_log_gate gate-check BLOCK create "$FILE" frozen-red-file
+            exit 2
+            ;;
+        esac
+      fi
+      ;;
+  esac
+fi
+#
 # ANCHORED, every one of them. The previous spelling included *test*|*Test*|*spec*
 # matched anywhere in the path, so any source file whose NAME merely contained
 # those letters was ungated -- measured on src/services/LatestReport.ts and
@@ -204,7 +255,6 @@ esac
 # This hook is on the latency path of every Edit/Write. A version that spawned
 # one parser per key cost ~1.7s per invocation and turned the self-test into a
 # three-minute run that looked like a hang. One parse, six values.
-GATE=".claude/state/gate.json"
 
 unblock_hint() {
   echo "Complete and approve the plan and test phases, then record the decision:" >&2

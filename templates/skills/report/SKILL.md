@@ -31,10 +31,14 @@ argument-hint: [YYYY-MM]
   | blocks per completed feature, trending | falling = the workflow is being internalised; flat and high = the gate is in the wrong place, not that people are careless |
   | the most common block `reason` | `missing-reuse` concentrated in one directory means that surface needs a shared component, not more discipline |
   | source edits with **zero** blocks and no `create` in the log | **the one that matters.** It means work reached source without passing the gate — a bypass nobody has found yet, or a hook that stopped firing |
+  | `red-recorded` vs `red-na` vs `red-manual`, from `OPEN` rows | `grep 'gate.sh\tOPEN' .claude/state/gate-log.tsv \| awk -F'\t' '{print $6}' \| sort \| uniq -c`. `red-recorded` is `gate.sh test --red-cmd` evidence; `red-na` is an honest "no test applies"; `red-manual` is a typed sentence with nothing behind it — every one of those is a `--red` this pipeline cannot tell apart from a real failing test by the hook alone. A high and rising `red-manual` share means the TEST phase is being skipped in practice, whatever the phase name in `gate.json` says |
 
-  That last line is the only signal that separates "the pipeline is followed"
-  from "the pipeline is inert", so lead with it when it is non-zero. A month
-  with no blocks at all is not a good month; it is an unverified claim.
+  That third-from-last line is the only signal that separates "the pipeline is
+  followed" from "the pipeline is inert", so lead with it when it is non-zero.
+  A month with no blocks at all is not a good month; it is an unverified
+  claim. `red-manual` concentrated in one kind of change (design tokens,
+  config-only diffs) is expected and fine; spread across ordinary feature work
+  it is the TEST phase being nominal only.
 - **Tokens** — two sources, and keep them apart.
 
   From `savings.sh`, which is **measured**: how many filtered runs there were,

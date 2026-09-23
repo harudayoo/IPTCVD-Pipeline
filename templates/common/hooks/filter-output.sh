@@ -61,7 +61,13 @@ case "$CMD" in *\|*|*\>*) echo '{}'; exit 0 ;; esac
 # three crosses a test runner uses. A filter that knows only the test
 # vocabulary quietly eats a real lint or audit finding and leaves behind an
 # exit code nobody can explain.
-FILTER="grep -B2 -A8 -E '(FAIL|ERROR|Error|error:|✕|✗|✘|✖|^ *[0-9]+:[0-9]+ +(error|warning)|problems? \(|assert|Exception|vulnerabilit|advisor|Timed out|^ *Tests?: |^ *Duration: |\[OK\]|built in |No security vulnerability|[0-9]+ (passed|failed|vulnerabilities))'"
+#
+# STUDIO_ASSERTION_PATTERN (from _guard.sh) IS this vocabulary now, not a copy
+# of it -- gate.sh's `test --red-cmd` matches the same pattern to decide
+# whether a command's failure is evidence of a red TEST or just a crash, and
+# the two definitions drifting apart would mean a run this hook highlights as
+# a real failure and a run gate.sh accepts as red evidence stop agreeing.
+FILTER="grep -B2 -A8 -E '$STUDIO_ASSERTION_PATTERN'"
 
 # --- and it must MEASURE what it claims to save ----------------------------
 #

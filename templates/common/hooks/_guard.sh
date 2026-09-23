@@ -11,6 +11,14 @@
 #   4. Record every gate decision, so "is the pipeline followed?" is a query
 #      rather than an opinion.
 
+# The vocabulary a test/build/lint/audit runner uses to say "something is
+# wrong", as opposed to merely exiting non-zero -- a crash or a syntax error in
+# the runner ITSELF is non-zero too, and is not evidence that the test you
+# meant to write actually failed. Declared once: filter-output.sh's rewrite
+# and gate.sh's `test --red-cmd` both match against this, so the definition of
+# "looks like a real failure" cannot drift between the two doors that check it.
+STUDIO_ASSERTION_PATTERN='(FAIL|ERROR|Error|error:|✕|✗|✘|✖|^ *[0-9]+:[0-9]+ +(error|warning)|problems? \(|assert|Exception|vulnerabilit|advisor|Timed out|^ *Tests?: |^ *Duration: |\[OK\]|built in |No security vulnerability|[0-9]+ (passed|failed|vulnerabilities))'
+
 studio_guard() {
   local self="$1"
   if grep -q '{{[A-Z_]*}}' "$self" 2>/dev/null; then
