@@ -38,6 +38,8 @@ mk() { # mk <dir> <stack>
     python) mkdir -p src tests; echo 'x=1' > src/a.py; echo '[project]' > pyproject.toml ;;
     go)     mkdir -p src; echo 'package main' > src/m.go; printf 'module d\n\ngo 1.22\n' > go.mod ;;
     rust)   mkdir -p src; echo 'fn main(){}' > src/main.rs; printf '[package]\nname="d"\n' > Cargo.toml ;;
+    dotnet) mkdir -p WebSite SQLScripts; echo '<Project Sdk="Microsoft.NET.Sdk.Web"/>' > WebSite/WebSite.csproj
+            echo 'class A {}' > WebSite/A.cs; echo 'select 1;' > SQLScripts/s.sql ;;
     empty)  : ;;
   esac
   git add -A >/dev/null 2>&1; git commit -qm i >/dev/null 2>&1 || true )
@@ -49,9 +51,14 @@ import re,sys,pathlib
 p=pathlib.Path(sys.argv[1])/'docs/setup/PROFILE.md'
 if not p.exists(): sys.exit(0)
 t=p.read_text()
+# The root has to EXIST: configure.sh refuses a profile whose declared roots
+# are all missing. Laravel keeps its code in app/; an empty repo gets a src/.
+root=pathlib.Path(sys.argv[1])
+src_root='app' if (root/'app').is_dir() and not (root/'src').is_dir() else 'src'
+(root/src_root).mkdir(exist_ok=True)
 generic={'Dev command':'`true`','Test command (non-watching)':'`true`','Single-test command':'`true`',
  'Format command (fixes)':'`true`','Type-check command':'`true`','Build command':'`true`',
- 'Dependency audit command':'`true`','Source roots':'src','Front-end root':'src','Test root':'tests',
+ 'Dependency audit command':'`true`','Source roots':src_root,'Front-end root':src_root,'Test root':'tests',
  'Design token file':'src/styles/tokens.css','Has UI':'yes','Project name':'demo','Stack':'test',
  'Package manager':'npm'}
 out=[]
@@ -80,6 +87,26 @@ for stack in node laravel python go rust empty; do
     no "$stack: install failed"
   fi
 done
+
+# ------------------------------------------------------ roots that fit the repo
+hd "A2. Source roots describe THIS repository"
+# Seen in the field: a .NET repo (WebSite/, SQLScripts/, Reports/) configured
+# with "src,app,lib". It installed, verified, and guarded nothing.
+d="$W/dotnet"; mk "$d" dotnet
+$S/install.sh --plan pro --target "$d" >/dev/null 2>&1
+grep -qE '^\| Source roots \| WebSite \|' "$d/docs/setup/PROFILE.md" \
+  && ok ".NET: the csproj directory is detected as the source root" \
+  || no ".NET: source root not detected ($(grep 'Source roots' "$d/docs/setup/PROFILE.md"))"
+sed -i 's/NEEDS_REVIEW/true/g' "$d/docs/setup/PROFILE.md"
+out=$($S/configure.sh --target "$d" 2>&1 | strip)
+case "$out" in
+  *"NOT guarded"*SQLScripts*) ok "configure names tracked code outside every root (SQLScripts)" ;;
+  *) no "configure did not warn about SQLScripts/ being unguarded" ;;
+esac
+sed -i 's/^| Source roots | WebSite |/| Source roots | src,app,lib |/' "$d/docs/setup/PROFILE.md"
+$S/configure.sh --target "$d" >/dev/null 2>&1 \
+  && no "configure accepted roots that exist nowhere in the repo" \
+  || ok "configure refuses roots that exist nowhere in the repo"
 
 # ------------------------------------------------------------- idempotency
 hd "B. Idempotency"

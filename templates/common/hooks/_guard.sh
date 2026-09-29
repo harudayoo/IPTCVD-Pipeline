@@ -225,6 +225,22 @@ studio_find_root() {
   [ -n "$d" ] || d="/"
   while :; do
     if [ -f "$d/.claude/state/gate.json" ]; then STUDIO_ROOT="$d"; return 0; fi
+    # A LINKED WORKTREE with no gate.json of its own is still its own root.
+    # Walking past it lands on the main checkout, the path strips to
+    # `.worktrees/feat/src/x.ts`, and `^src/` never matches it -- measured
+    # walking through a closed gate. Stopping here instead points $GATE at a
+    # file that does not exist, which blocks: the fail-closed direction.
+    # Only a worktree's `.git` FILE counts ("gitdir: .../worktrees/<name>"); a
+    # submodule's says ".../modules/<name>" and is left to the walk, so a
+    # submodule under a source root stays guarded by the outer checkout.
+    # `read` from a redirect is a builtin, and runs only when a .git file exists.
+    if [ -f "$d/.git" ]; then
+      local gitdir_line=""
+      IFS= read -r gitdir_line < "$d/.git" 2>/dev/null || true
+      case "$gitdir_line" in
+        gitdir:*/worktrees/*) STUDIO_ROOT="$d"; return 0 ;;
+      esac
+    fi
     case "$d" in
       /|[A-Za-z]:) break ;;                       # filesystem root or bare drive: nothing higher
       */*) d="${d%/*}"; [ -n "$d" ] || d="/" ;;
@@ -233,6 +249,21 @@ studio_find_root() {
   done
   STUDIO_ROOT=""
 }
+
+# ------------------------------------------------------------- the gate seal
+#
+# Edit/Write and every shell shape bash-gate.sh knows are refused on
+# gate.json, but an interpreter writing it -- `python -c "open(...)"` -- is not
+# a shape any parser sees. gate.sh records the checksum of every gate.json it
+# writes; bash-audit.sh restores any gate.json a Bash call changed to content
+# that is neither sealed nor the committed HEAD version. One definition, so the
+# writer and the checker cannot hash differently.
+#
+# cksum, not git hash-object: gate.sh must seal in a directory that is not a
+# git repository, and a seal that silently failed to write would make the
+# audit revert gate.sh's own legitimate write.
+STUDIO_GATE_SEAL=".claude/state/gate.seal"
+studio_gate_sum() { cksum < "$1" 2>/dev/null | cut -d' ' -f1-2; }
 
 # ------------------------------------------------------------- gate decisions
 #

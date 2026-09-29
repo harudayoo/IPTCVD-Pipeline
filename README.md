@@ -1038,7 +1038,13 @@ Two rules of thumb regardless of tier:
 ## Known limitations
 
 - The gate hook protects only the source roots named in your profile. Files
-  outside them are not gated, by design.
+  outside them are not gated, by design. So `configure.sh` refuses a profile
+  whose declared roots **all** fail to exist (the gate would guard nothing
+  while `verify.sh` still passed), and it lists every top-level directory
+  of tracked code that no root covers. Leaving one of those out is allowed,
+  but you should choose to. `install.sh` suggests the `*.csproj`
+  directories as roots for .NET repos; other layouts it cannot detect are
+  left as `NEEDS_REVIEW`.
 - `bash-gate` fails **open** on shell forms it cannot parse, and it cannot
   parse everything — a wrapper it has not been taught, or a write inside an
   interactive editor session. The list of what it *does* cover is in the
@@ -1118,8 +1124,19 @@ Two rules of thumb regardless of tier:
   predates this recording mechanism. It is logged as `red-manual` rather
   than `red-recorded` in `gate-log.tsv`, so `/studio-report` can show the
   rate and a team can decide whether to ratchet it down.
+- `gate.json` cannot be edited from a session, and every shell shape
+  `bash-gate` knows is refused on it. An interpreter writing it
+  (`python -c "open(...)"`) gets past the parser, so `bash-audit` compares
+  it before and after each Bash call. It puts it back unless `gate.sh`
+  sealed the new content or the new content is the committed `HEAD` version (a
+  checkout or reset). A write that also forges the seal still gets through;
+  a `gate.json` with no matching `gate.sh` row in `gate-log.tsv` is the trace
+  it leaves. Only the main checkout's `gate.json` is watched this way.
 - Each `git worktree` gets its own gate, judged by its own
-  `.claude/state/gate.json` and logged to its own `gate-log.tsv`. The
+  `.claude/state/gate.json` and logged to its own `gate-log.tsv`. A worktree
+  with no `gate.json` yet (e.g. one created before the file was committed)
+  is blocked, not governed by the main checkout's gate: run
+  `bash .claude/scripts/gate.sh ...` inside it to give it one. The
   `merge=union` `.gitattributes` entry that keeps two worktrees' logs from
   conflicting on merge is added by `install.sh` going forward; an existing
   install picks it up only after re-running `install.sh` or adding the line

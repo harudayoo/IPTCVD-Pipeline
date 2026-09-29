@@ -606,6 +606,21 @@ g "in-repo worktree is guarded"          "$WORK/.worktrees/feat/src/services/due
 # The worktree's own gate is what decides, not the main checkout's:
 set_gate '{"phase":"create","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
 g "main gate open does not open worktree" "$WORK/.worktrees/feat/src/services/dues.ts" 2
+# A worktree created before gate.json was committed has none of its own. The
+# root walk used to pass it and land on the main checkout, where
+# `.worktrees/bare/src/...` matches no root: measured walking through a closed
+# gate. It stops at the worktree's .git file now, and a missing gate blocks.
+set_gate '{"phase":"idle"}'
+mkdir -p .worktrees/bare/src/services
+printf 'gitdir: %s/.git/worktrees/bare\n' "$WORK" > .worktrees/bare/.git
+g "worktree with no gate.json of its own blocks"  "$WORK/.worktrees/bare/src/services/dues.ts" 2
+g "  and by its relative spelling too"            ".worktrees/bare/src/services/dues.ts"      2
+# A submodule's .git file is NOT a boundary: it sits under a source root and
+# the outer gate still governs it.
+mkdir -p src/sub
+printf 'gitdir: ../../.git/modules/sub\n' > src/sub/.git
+g "a submodule under a source root stays guarded" "$WORK/src/sub/x.ts" 2
+rm -rf .worktrees/bare src/sub
 
 head_ "12f. verify phase is read-only for source"
 set_gate '{"phase":"verify","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
@@ -662,6 +677,34 @@ OUT=$(bash .claude/hooks/bash-audit.sh post </dev/null 2>&1); RC=$?
               || fail "a second write to an already-dirty file is still caught" "exit 2" "exit $RC"
 rm -f src/services/already-dirty.ts w3.sh
 rm -f .claude/state/.bash-audit-pre.tsv .claude/state/gate-log.tsv
+
+head_ "12h. bash-audit · gate.json rewritten behind the parser's back"
+# bash-gate refuses echo/cp/jq-and-mv into gate.json, but not an interpreter
+# writing it: measured, `python -c "open('.claude/state/gate.json','w')..."`
+# passed bash-gate with exit 0. A script invoked by path is the same shape
+# without needing python in the test environment.
+OPEN_GATE='{"phase":"create","problem":"National total sums chapter dues","red":"DuesTest::national fails: expected 0, got 41250"}'
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1
+printf "printf '%%s\\\\n' '%s' > .claude/state/gate.json\n" "$OPEN_GATE" > w4.sh
+bash w4.sh
+OUT=$(bash .claude/hooks/bash-audit.sh post </dev/null 2>&1); RC=$?
+[ "$RC" = 2 ] && pass "a script that rewrites gate.json is caught" \
+              || fail "a script that rewrites gate.json is caught" "exit 2" "exit $RC"
+grep -q '"phase":"idle"' .claude/state/gate.json \
+  && pass "gate.json is put back to what it was before the call" \
+  || fail "gate.json is put back to what it was before the call" '"phase":"idle"' "$(cat .claude/state/gate.json)"
+g "and the gate is still closed afterwards" "src/services/dues.ts" 2
+rm -f w4.sh
+
+# gate.sh's own writes are sealed, so the audit never reverts them.
+bash .claude/hooks/bash-audit.sh pre </dev/null >/dev/null 2>&1
+bash .claude/scripts/gate.sh plan >/dev/null 2>&1
+bash .claude/hooks/bash-audit.sh post </dev/null >/dev/null 2>&1; RC=$?
+[ "$RC" = 0 ] && grep -q '"phase":"plan"' .claude/state/gate.json \
+  && pass "a gate.sh transition is left alone" \
+  || fail "a gate.sh transition is left alone" 'exit 0, phase plan' "exit $RC, $(cat .claude/state/gate.json)"
+rm -f .claude/state/.bash-audit-* .claude/state/gate.seal .claude/state/gate-log.tsv
 
 # ------------------------------------------------------------ 13. gate.sh CLI
 head_ "13. gate.sh refuses an answer that is not an answer"

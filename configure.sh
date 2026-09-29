@@ -283,15 +283,64 @@ _ere_escape() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
 # any metacharacter IN the name (., +, (, a stray |) changes what the pattern
 # matches instead of naming the directory literally.
 SOURCE_ROOTS_ESC=""
+_ROOTS_PRESENT=0
 OLDIFS="$IFS"; IFS=','
 for _r in $SOURCE_ROOTS; do
   _r="$(printf '%s' "$_r" | tr -d ' ')"
   [ -n "$_r" ] || continue
-  [ -d "$TARGET/$_r" ] || c_yel "  warning: declared source root '$_r' does not exist as a directory under $TARGET."
+  if [ -d "$TARGET/$_r" ]; then
+    _ROOTS_PRESENT=1
+  else
+    c_yel "  warning: declared source root '$_r' does not exist as a directory under $TARGET."
+  fi
   SOURCE_ROOTS_ESC="${SOURCE_ROOTS_ESC:+$SOURCE_ROOTS_ESC|}$(_ere_escape "$_r")"
 done
 IFS="$OLDIFS"
 SOURCE_ROOTS_REGEX="^($SOURCE_ROOTS_ESC)(/|$)"
+
+# NONE of the declared roots exists: the gate would guard nothing, and every
+# check verify.sh runs would still pass, because each one probes a path under
+# a declared root. Seen in the field: a .NET repo (WebSite/, SQLScripts/,
+# Reports/) configured with "src,app,lib" -- installed, "verified", and inert.
+# One missing root among real ones stays a warning above; all of them missing
+# is a profile describing some other repository.
+if [ "$_ROOTS_PRESENT" = 0 ]; then
+  c_red "error: none of the declared source roots ($SOURCE_ROOTS) exists under $TARGET."
+  c_dim "  The gate would guard nothing here while every check reports success."
+  c_dim "  Set 'Source roots' in docs/setup/PROFILE.md to the directories that hold"
+  c_dim "  this project's code. For a project with no code yet, create the directory"
+  c_dim "  first."
+  exit 1
+fi
+
+# Tracked code that NO declared root covers is ungated, and nothing else says
+# so. Listed, not refused: a tooling or scripts directory can be left out on
+# purpose, but it should be a decision rather than something nobody noticed.
+# Top-level directories only, from `git ls-files`, so ignored and vendored
+# trees never show up here.
+_CODE_EXT='\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|go|rs|php|rb|java|kt|kts|scala|cs|vb|fs|cshtml|razor|aspx|ascx|swift|c|cc|cpp|h|hpp|sql)$'
+_UNCOVERED=""
+if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  while IFS= read -r _d; do
+    [ -n "$_d" ] || continue
+    case "$_d" in
+      .*|docs|node_modules|vendor|dist|build|out|bin|obj|coverage|test|tests|spec|__tests__) continue ;;
+    esac
+    [ -n "$TEST_ROOT" ] && [ "$_d" = "$TEST_ROOT" ] && continue
+    _covered=0
+    for _r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' '); do
+      case "$_r" in "$_d"|"$_d"/*) _covered=1 ;; esac
+    done
+    [ "$_covered" = 1 ] || _UNCOVERED="${_UNCOVERED:+$_UNCOVERED, }$_d"
+  done < <(git -C "$TARGET" -c core.quotePath=false ls-files 2>/dev/null \
+             | grep -iE "$_CODE_EXT" | grep / | cut -d/ -f1 | sort -u)
+fi
+if [ -n "$_UNCOVERED" ]; then
+  c_yel "  warning: code under these top-level directories is NOT guarded by the gate:"
+  c_yel "    $_UNCOVERED"
+  c_dim "    Add them to 'Source roots' in docs/setup/PROFILE.md, or leave them out on"
+  c_dim "    purpose. Edits there skip the plan/test phases entirely."
+fi
 
 # Shared surfaces -> an ERE the gate can grep with:
 #   "src/components,src/services"  ->  "^(src/components|src/services)/"

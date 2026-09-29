@@ -343,6 +343,24 @@ detect_stack() {
     [ "$AUDIT_CMD" = "NEEDS_REVIEW" ] && AUDIT_CMD="pip-audit"
   fi
 
+  # .NET keeps no source in a conventional src/: each project lives in its own
+  # top-level directory beside its *.csproj. Leaving the roots NEEDS_REVIEW
+  # there is how a profile ended up hand-filled with "src,app,lib" on a repo
+  # holding none of them. Suggest the directories the project files are in.
+  # A project file at the repo root itself cannot be a root and is skipped.
+  if [ "$SOURCE_ROOTS" = "NEEDS_REVIEW" ]; then
+    dn_roots=$(cd "$TARGET" && find . -maxdepth 3 \( -name node_modules -o -name .git -o -name bin -o -name obj \) -prune \
+                 -o \( -name '*.csproj' -o -name '*.vbproj' -o -name '*.fsproj' \) -print 2>/dev/null \
+               | sed 's|^\./||' | grep / | cut -d/ -f1 | sort -u | paste -sd, -) || dn_roots=""
+    if [ -n "$dn_roots" ]; then
+      [ "$STACK" = "unknown" ] && STACK=".NET"
+      SOURCE_ROOTS="$dn_roots"
+      [ "$TEST_CMD" = "NEEDS_REVIEW" ] && TEST_CMD="dotnet test"
+      [ "$BUILD_CMD" = "NEEDS_REVIEW" ] && BUILD_CMD="dotnet build"
+      [ "$AUDIT_CMD" = "NEEDS_REVIEW" ] && AUDIT_CMD="dotnet list package --vulnerable"
+    fi
+  fi
+
   # Directories where a fifth near-duplicate of an existing thing tends to
   # appear. Guessed from what is actually on disk; the profile marks it for
   # confirmation like every other detected value.
@@ -633,7 +651,8 @@ c_grn "7. .gitignore"
 if [ "$DRY_RUN" = 0 ]; then
   for line in "CLAUDE.local.md" ".claude/settings.local.json" ".claude/.backup-*" \
               ".claude/agent-memory-local/" ".claude/state/filter-log.tsv" \
-              ".claude/state/session-log.tsv"; do
+              ".claude/state/session-log.tsv" ".claude/state/gate.seal" \
+              ".claude/state/.bash-audit-*"; do
     grep -qxF "$line" "$TARGET/.gitignore" 2>/dev/null || echo "$line" >> "$TARGET/.gitignore"
   done
 fi

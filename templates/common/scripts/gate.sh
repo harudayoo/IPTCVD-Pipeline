@@ -124,7 +124,14 @@ write_gate() {
     printf ',"updated_at":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '}\n'
   } > "$GATE"
+  seal_gate
 }
+
+# seal_gate -- record the checksum of the gate.json THIS script just wrote, so
+# bash-audit.sh can tell it apart from one an interpreter wrote behind the
+# parser's back. Best-effort: a missing seal only means the audit falls back
+# to comparing against HEAD.
+seal_gate() { studio_gate_sum "$GATE" > "$STUDIO_GATE_SEAL" 2>/dev/null || true; }
 
 CMD="${1:-show}"
 [ $# -gt 0 ] && shift
@@ -133,6 +140,7 @@ case "$CMD" in
   idle|plan|document)
     mkdir -p "$(dirname "$GATE")"
     printf '{"phase":"%s"}\n' "$CMD" > "$GATE"
+    seal_gate
     echo "gate: $CMD — source edits are blocked."
     ;;
 
@@ -223,6 +231,7 @@ EOF
     else
       mkdir -p "$(dirname "$GATE")"
       printf '{"phase":"test"}\n' > "$GATE"
+      seal_gate
       echo "gate: test — source edits are blocked."
     fi
     ;;

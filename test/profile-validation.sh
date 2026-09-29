@@ -165,11 +165,13 @@ check "audit chained with &&"             'Dependency audit command'    'compose
 check "several source roots"              'Source roots'                'src,lib'                      accept
 check "nested shared surfaces"            'Shared surfaces'             'src/components,src/services'  accept
 check "an ordinary test root"             'Test root'                   'tests'                        accept
-# A directory that does not exist yet is a WARNING, not a rejection -- the
-# profile may be filled in before the directory is created, or the field may
-# simply be wrong, and either way configure.sh cannot tell which without
-# refusing a legitimate not-yet-created root.
-check "a source root that does not exist yet"  'Source roots'  'does-not-exist-anywhere'  accept
+# ONE missing root beside a real one is a WARNING -- it may simply not have
+# been created yet. EVERY root missing is refused: the gate would guard
+# nothing while verify.sh passed, which is what a .NET repo configured with
+# "src,app,lib" (it had WebSite/, SQLScripts/, Reports/) actually shipped.
+check "one missing root beside a real one"     'Source roots'  'src,not-yet-created'      accept
+check "no declared root exists at all"         'Source roots'  'does-not-exist-anywhere'  reject
+check "the src,app,lib guess on a repo with none of them" 'Source roots' 'app,lib'        reject
 
 head_ "Root safety: normalise, escape, still guard"
 # Tested against the actual compiled hook, not just configure.sh's exit code --
@@ -180,6 +182,8 @@ check_root_guards() {  # check_root_guards <label> <declared-root> <path-that-mu
   N=$((N + 1))
   local d="$W/case$N"
   cp -a "$FIX" "$d" || { bad "$label" "could not copy the fixture"; return; }
+  # configure.sh refuses roots that exist nowhere, so the declared one must.
+  mkdir -p "$d/$(printf '%s' "$declared" | tr '\\' /)"
   if ! setfield "$d/docs/setup/PROFILE.md" 'Source roots' "$declared"; then
     bad "$label" "could not set the field"; rm -rf "$d"; return
   fi
@@ -203,6 +207,7 @@ check_root_never_guards() {
   N=$((N + 1))
   local d="$W/case$N"
   cp -a "$FIX" "$d" || { bad "$label" "could not copy the fixture"; return; }
+  mkdir -p "$d/$(printf '%s' "$declared" | tr '\\' /)"
   setfield "$d/docs/setup/PROFILE.md" 'Source roots' "$declared" >/dev/null 2>&1
   bash "$SRC/configure.sh" --target "$d" >"$d/out.log" 2>&1
   local rc

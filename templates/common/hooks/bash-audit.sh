@@ -96,11 +96,60 @@ snapshot() {
     done
 }
 
+# --- gate.json itself ----------------------------------------------------
+# Every door bash-gate.sh knows is shut on gate.json, but an interpreter writing
+# it (`python -c "open('.claude/state/gate.json','w')..."`) is no shape a
+# parser sees, and it opens the gate outright. So: keep a copy before the call,
+# and afterwards accept a changed gate.json only if gate.sh sealed it or it is
+# the committed HEAD version (a checkout, reset or pull). Anything else is put
+# back. Only the main checkout's gate is watched -- this hook cd's there.
+#
+# Residual gap, named: something that also forges the seal or this hook's own
+# copies, or commits a forged gate.json within the same call, gets through.
+# Both take knowing this scheme and leave a trail -- a commit, or a gate.json
+# with no matching gate.sh row in gate-log.tsv -- that a "just set the phase"
+# shortcut does not.
+GATE=".claude/state/gate.json"
+GATE_PRE=".claude/state/.bash-audit-gate.pre"
+GATE_PRE_SUM=".claude/state/.bash-audit-gate.sum"
+
+gate_change_is_sanctioned() {
+  local now blob
+  now=$(studio_gate_sum "$GATE")
+  [ "$now" = "$(cat "$GATE_PRE_SUM" 2>/dev/null)" ] && return 0
+  [ -f "$STUDIO_GATE_SEAL" ] && [ "$now" = "$(cat "$STUDIO_GATE_SEAL" 2>/dev/null)" ] && return 0
+  blob=$(git rev-parse -q --verify "HEAD:$GATE" 2>/dev/null) \
+    && [ "$(git hash-object -- "$GATE" 2>/dev/null)" = "$blob" ] && return 0
+  return 1
+}
+
+audit_gate() {
+  [ -f "$GATE_PRE_SUM" ] || return 0   # pre never ran: nothing to compare
+  [ -f "$GATE" ] || return 0           # deleted: gate-check.sh already fails closed on that
+  gate_change_is_sanctioned && return 0
+  if [ -f "$GATE_PRE" ]; then cp "$GATE_PRE" "$GATE"; else rm -f "$GATE"; fi
+  echo "BLOCKED: this Bash command rewrote .claude/state/gate.json without going" >&2
+  echo "  through gate.sh. It has been put back to what it was before the command." >&2
+  echo "  The phase is changed with  bash .claude/scripts/gate.sh <phase> ...  --" >&2
+  echo "  that is where the transition checks live." >&2
+  studio_log_gate bash-audit BYPASS - "$GATE" gate-rewritten
+  exit 2
+}
+
 if [ "$MODE" = pre ]; then
   mkdir -p .claude/state 2>/dev/null || true
   snapshot > "$STAMP" 2>/dev/null || true
+  if [ -f "$GATE" ]; then
+    cp "$GATE" "$GATE_PRE" 2>/dev/null || true
+    studio_gate_sum "$GATE" > "$GATE_PRE_SUM" 2>/dev/null || true
+  else
+    rm -f "$GATE_PRE" 2>/dev/null || true
+    printf 'absent\n' > "$GATE_PRE_SUM" 2>/dev/null || true
+  fi
   exit 0
 fi
+
+audit_gate
 
 # --- post: only matters once the phase says source should be untouched ---
 PHASE=""

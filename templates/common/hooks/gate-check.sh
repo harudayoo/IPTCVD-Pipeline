@@ -122,7 +122,7 @@ esac
 # fire for these paths anyway, since this block will have already exited.
 if studio_guard "$SELF" >/dev/null 2>&1; then
   case "${FILE,,}" in
-    .claude/hooks/*|.claude/scripts/*|.claude/state/gate.json|.claude/state/hooks.sha256|.claude/state/gate-log.tsv|.claude/settings.json|.claude/settings.local.json)
+    .claude/hooks/*|.claude/scripts/*|.claude/state/gate.json|.claude/state/gate.seal|.claude/state/.bash-audit-*|.claude/state/hooks.sha256|.claude/state/gate-log.tsv|.claude/settings.json|.claude/settings.local.json)
       echo "BLOCKED: $FILE is part of the enforcement layer and cannot be edited" >&2
       echo "  from inside a session, in any gate phase. This is not what the gate is" >&2
       echo "  for -- it is what checks the gate." >&2
