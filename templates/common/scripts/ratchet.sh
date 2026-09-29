@@ -33,9 +33,13 @@
 # The BAR lives in the baseline file, not in this script, so changing it is a
 # committed diff somebody can object to rather than an edit to a tool.
 set -uo pipefail
-cd "$(dirname "$0")/../.." || exit 1
+# shellcheck source=/dev/null
+. "$(dirname "$0")/../hooks/_guard.sh" || { echo "$(basename "$0"): cannot find ../hooks/_guard.sh" >&2; exit 1; }
+studio_locate "$0"
+# Measures the CODEBASE; the baseline is pipeline state and lives in the HOME.
+cd "$STUDIO_PROJECT" || exit 1
 
-BASELINE=".claude/state/size-baseline.tsv"
+BASELINE="$STUDIO_STATE/size-baseline.tsv"
 DEFAULT_BAR=800
 SOURCE_ROOTS="{{SOURCE_ROOTS}}"
 MODE="${1:-check}"
@@ -115,7 +119,7 @@ if [ ! -f "$BASELINE" ]; then
   # that exits 0 looks exactly like a passing one.
   echo "ratchet: no baseline at $BASELINE." >&2
   echo "  Record the tree as it is today, then commit it:" >&2
-  echo "    bash .claude/scripts/ratchet.sh --update" >&2
+  echo "    $(studio_script_cmd ratchet.sh) --update" >&2
   exit 1
 fi
 
@@ -147,7 +151,7 @@ if [ "$FAIL" != 0 ]; then
   [ "$NEW" -gt 0 ]  && echo "  $NEW file(s) crossed the bar. Split them into cohesive units." >&2
   [ "$GREW" -gt 0 ] && echo "  $GREW baselined file(s) grew. Oversized files may shrink, never grow -- extract before adding." >&2
   echo "  If it is genuinely unavoidable, re-record in the SAME commit, with a reason:" >&2
-  echo "    bash .claude/scripts/ratchet.sh --update" >&2
+  echo "    $(studio_script_cmd ratchet.sh) --update" >&2
   exit 1
 fi
 

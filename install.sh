@@ -60,6 +60,11 @@ PLANS
 OPTIONS
   --plan TIER      Which pipeline to install (see above)
   --target DIR     Project to install into (default: current directory)
+  --home DIR       EXTERNAL layout: put every pipeline file in DIR, outside
+                   the project, and write nothing to the project at all. For
+                   repositories that may not hold Claude or pipeline files.
+                   Start Claude with DIR/iptcvd-claude (or .ps1/.cmd on
+                   Windows) -- plain `claude` in the project loads none of it.
   --dry-run        Show what would happen, change nothing
   --force          Overwrite existing studio files (backup still taken)
   --no-docs        Skip the docs/ scaffolding
@@ -81,6 +86,9 @@ while [ $# -gt 0 ]; do
     --plan=*)      PLAN="${1#*=}"; shift ;;
     --tier=*)      PLAN="${1#*=}"; shift ;;
     --target)      TARGET="$(cd "$2" 2>/dev/null && pwd)" || die "no such directory: $2"; shift 2 ;;
+    --home)        [ -n "${2:-}" ] || die "--home needs a directory"
+                   mkdir -p "$2" 2>/dev/null || die "cannot create --home $2"
+                   EXT_HOME="$(cd "$2" && pwd)"; shift 2 ;;
     --dry-run)     DRY_RUN=1; shift ;;
     --force)       FORCE=1; shift ;;
     --no-docs)     NO_DOCS=1; shift ;;
@@ -95,15 +103,27 @@ done
 [ -d "$SRC/templates/tiers" ] || die "templates/tiers/ not found — this looks like a pre-2.0 checkout"
 [ -d "$TARGET" ]              || die "target does not exist: $TARGET"
 
-BACKUP="$TARGET/.claude/.backup-$STAMP"
-STUDIO_STATE="$TARGET/.claude/state/studio.json"
+# DEST is where the pipeline's own files go: the project itself, or the
+# external home. Detection always reads TARGET, the codebase.
+EXT_HOME="${EXT_HOME:-}"
+if [ -n "$EXT_HOME" ]; then
+  # shellcheck source=lib/external-home.sh
+  . "$SRC/lib/external-home.sh"
+  ext_check_disjoint "$EXT_HOME" "$TARGET"
+  DEST="$EXT_HOME"; LAYOUT="external"
+else
+  DEST="$TARGET"; LAYOUT="in-repo"
+fi
+
+BACKUP="$DEST/.claude/.backup-$STAMP"
+STUDIO_STATE="$DEST/.claude/state/studio.json"
 
 run() { if [ "$DRY_RUN" = 1 ]; then c_dim "  would: $*"; else eval "$@"; fi; }
 
 backup_if_exists() {
   local p="$1"
   [ -e "$p" ] || return 0
-  local rel="${p#$TARGET/}"
+  local rel="${p#$DEST/}"
   run "mkdir -p '$BACKUP/$(dirname "$rel")'"
   run "cp -a '$p' '$BACKUP/$rel'"
   c_dim "  backed up $rel"
@@ -187,7 +207,7 @@ choose_plan() {
 
 # ---------------------------------------------------------------- uninstall
 if [ "$UNINSTALL" = 1 ]; then
-  c_yel "Uninstalling IPTCVD Pipeline from $TARGET"
+  c_yel "Uninstalling IPTCVD Pipeline from $DEST"
   PREV="$(installed_plan || true)"
 
   # Remove only what this tier installed. Blanket-removing .claude/skills and
@@ -198,27 +218,27 @@ if [ "$UNINSTALL" = 1 ]; then
     # shellcheck source=/dev/null
     . "$SRC/templates/tiers/$PREV/manifest.conf"
     for a in $TIER_AGENTS; do
-      backup_if_exists "$TARGET/.claude/agents/$a.md"; run "rm -f '$TARGET/.claude/agents/$a.md'"
+      backup_if_exists "$DEST/.claude/agents/$a.md"; run "rm -f '$DEST/.claude/agents/$a.md'"
     done
     for s in $TIER_SKILLS; do
-      backup_if_exists "$TARGET/.claude/skills/$s"; run "rm -rf '$TARGET/.claude/skills/$s'"
+      backup_if_exists "$DEST/.claude/skills/$s"; run "rm -rf '$DEST/.claude/skills/$s'"
     done
     for r in $TIER_RULES; do
-      backup_if_exists "$TARGET/.claude/rules/$r.md"; run "rm -f '$TARGET/.claude/rules/$r.md'"
+      backup_if_exists "$DEST/.claude/rules/$r.md"; run "rm -f '$DEST/.claude/rules/$r.md'"
     done
     for p in .claude/hooks .claude/scripts .claude/state .claude/workflows; do
-      backup_if_exists "$TARGET/$p"; run "rm -rf '$TARGET/$p'"
+      backup_if_exists "$DEST/$p"; run "rm -rf '$DEST/$p'"
     done
     # Drop the now-empty studio directories, but never a directory someone
     # else still has files in.
     for d in .claude/agents .claude/skills .claude/rules; do
-      [ "$DRY_RUN" = 1 ] || rmdir "$TARGET/$d" 2>/dev/null || true
+      [ "$DRY_RUN" = 1 ] || rmdir "$DEST/$d" 2>/dev/null || true
     done
-    if [ -d "$TARGET/.claude/skills" ] || [ -d "$TARGET/.claude/agents" ]; then
+    if [ -d "$DEST/.claude/skills" ] || [ -d "$DEST/.claude/agents" ]; then
       c_yel "  Left in place (not installed by IPTCVD Pipeline):"
       for d in agents skills rules; do
-        [ -d "$TARGET/.claude/$d" ] || continue
-        for f in "$TARGET/.claude/$d/"*; do
+        [ -d "$DEST/.claude/$d" ] || continue
+        for f in "$DEST/.claude/$d/"*; do
           [ -e "$f" ] && c_dim "    .claude/$d/$(basename "$f")"
         done
       done
@@ -230,12 +250,12 @@ if [ "$UNINSTALL" = 1 ]; then
     c_dim "  all in the backup."
     for p in .claude/agents .claude/skills .claude/rules .claude/hooks \
              .claude/scripts .claude/state .claude/workflows; do
-      backup_if_exists "$TARGET/$p"
-      run "rm -rf '$TARGET/$p'"
+      backup_if_exists "$DEST/$p"
+      run "rm -rf '$DEST/$p'"
     done
   fi
 
-  c_grn "Removed. Backup at ${BACKUP#$TARGET/}"
+  c_grn "Removed. Backup at ${BACKUP#$DEST/}"
   c_dim "docs/, CLAUDE.md and settings.json were left alone — remove by hand if you want them gone."
   c_dim "settings.json still references .claude/hooks/*.sh; drop those entries too."
   exit 0
@@ -433,22 +453,22 @@ if [ -n "$PREV_PLAN" ] && [ "$PREV_PLAN" != "$PLAN" ] && plan_is_valid "$PREV_PL
   PREV_RULES="$(manifest_field "$PREV_PLAN" TIER_RULES)"
   for a in $PREV_AGENTS; do
     case " $TIER_AGENTS " in *" $a "*) continue ;; esac
-    backup_if_exists "$TARGET/.claude/agents/$a.md"; run "rm -f '$TARGET/.claude/agents/$a.md'"
+    backup_if_exists "$DEST/.claude/agents/$a.md"; run "rm -f '$DEST/.claude/agents/$a.md'"
   done
   for s in $PREV_SKILLS; do
     case " $TIER_SKILLS " in *" $s "*) continue ;; esac
-    backup_if_exists "$TARGET/.claude/skills/$s"; run "rm -rf '$TARGET/.claude/skills/$s'"
+    backup_if_exists "$DEST/.claude/skills/$s"; run "rm -rf '$DEST/.claude/skills/$s'"
   done
   for r in $PREV_RULES; do
     case " $TIER_RULES " in *" $r "*) continue ;; esac
-    backup_if_exists "$TARGET/.claude/rules/$r.md"; run "rm -f '$TARGET/.claude/rules/$r.md'"
+    backup_if_exists "$DEST/.claude/rules/$r.md"; run "rm -f '$DEST/.claude/rules/$r.md'"
   done
   # A tier change rewrites the phase list in CLAUDE.md and the env block in
   # settings.json. Leaving the old ones in place is the worst of both.
   FORCE=1
   c_yel "  --force implied by the tier change: studio-owned files will be re-rendered."
   echo
-elif [ -d "$TARGET/.claude/agents" ] && [ "$FORCE" = 0 ] && [ "$DRY_RUN" = 0 ]; then
+elif [ -d "$DEST/.claude/agents" ] && [ "$FORCE" = 0 ] && [ "$DRY_RUN" = 0 ]; then
   c_yel "An existing .claude/agents/ was found."
   c_dim "Re-running will back it up and replace studio-owned files."
   ask "Continue? [y/N] " \
@@ -461,11 +481,11 @@ fi
 c_grn "1. Creating directories"
 for d in .claude/agents .claude/skills .claude/rules .claude/hooks .claude/scripts \
          .claude/state .claude/agent-memory ${TIER_EXTRA_CLAUDE_DIRS:-}; do
-  run "mkdir -p '$TARGET/$d'"
+  run "mkdir -p '$DEST/$d'"
 done
 if [ "$NO_DOCS" = 0 ]; then
   for d in docs/setup docs/adr docs/specs docs/handoff docs/reports ${TIER_EXTRA_DOC_DIRS:-}; do
-    run "mkdir -p '$TARGET/$d'"
+    run "mkdir -p '$DEST/$d'"
   done
 fi
 
@@ -475,7 +495,7 @@ c_grn "2. Installing the $TIER_NAME roster"
 n_agents=0
 for a in $TIER_AGENTS; do
   s="$(resolve agents "$a")"
-  d="$TARGET/.claude/agents/$a.md"
+  d="$DEST/.claude/agents/$a.md"
   backup_if_exists "$d"; run "cp '$s' '$d'"
   n_agents=$((n_agents + 1))
 done
@@ -484,7 +504,7 @@ c_dim "  $n_agents agents"
 n_skills=0
 for s in $TIER_SKILLS; do
   p="$(resolve skills "$s")"
-  d="$TARGET/.claude/skills/$s"
+  d="$DEST/.claude/skills/$s"
   backup_if_exists "$d"
   run "rm -rf '$d'"
   run "mkdir -p '$d'"
@@ -496,31 +516,31 @@ c_dim "  $n_skills skills"
 n_rules=0
 for r in $TIER_RULES; do
   s="$(resolve rules "$r")"
-  d="$TARGET/.claude/rules/$r.md"
+  d="$DEST/.claude/rules/$r.md"
   backup_if_exists "$d"; run "cp '$s' '$d'"
   n_rules=$((n_rules + 1))
 done
 c_dim "  $n_rules rules"
 
-run "cp '$SRC/templates/common/hooks/'*.sh '$TARGET/.claude/hooks/'"
-run "chmod +x '$TARGET/.claude/hooks/'*.sh"
+run "cp '$SRC/templates/common/hooks/'*.sh '$DEST/.claude/hooks/'"
+run "chmod +x '$DEST/.claude/hooks/'*.sh"
 n_hooks=$(find "$SRC/templates/common/hooks" -name '_*' -prune -o -name '*.sh' -print | wc -l | tr -d ' ')
 c_dim "  $n_hooks hooks"
 
 # The gate's own tooling. gate.sh records the plan the hooks read;
 # hook-integrity.sh is what makes disarming them visible rather than silent.
-run "cp '$SRC/templates/common/scripts/'*.sh '$TARGET/.claude/scripts/'"
-run "chmod +x '$TARGET/.claude/scripts/'*.sh"
+run "cp '$SRC/templates/common/scripts/'*.sh '$DEST/.claude/scripts/'"
+run "chmod +x '$DEST/.claude/scripts/'*.sh"
 c_dim "  $(find "$SRC/templates/common/scripts" -name '*.sh' | wc -l | tr -d ' ') scripts"
 
-if [ ! -f "$TARGET/.claude/state/gate.json" ] || [ "$FORCE" = 1 ]; then
-  backup_if_exists "$TARGET/.claude/state/gate.json"
-  run "cp '$SRC/templates/tiers/$PLAN/gate.json' '$TARGET/.claude/state/gate.json'"
+if [ ! -f "$DEST/.claude/state/gate.json" ] || [ "$FORCE" = 1 ]; then
+  backup_if_exists "$DEST/.claude/state/gate.json"
+  run "cp '$SRC/templates/tiers/$PLAN/gate.json' '$DEST/.claude/state/gate.json'"
 fi
 
 if [ "$NO_DOCS" = 0 ]; then
-  [ -f "$TARGET/docs/adr/TEMPLATE.md" ] \
-    || run "cp '$SRC/templates/common/docs/adr/TEMPLATE.md' '$TARGET/docs/adr/TEMPLATE.md'"
+  [ -f "$DEST/docs/adr/TEMPLATE.md" ] \
+    || run "cp '$SRC/templates/common/docs/adr/TEMPLATE.md' '$DEST/docs/adr/TEMPLATE.md'"
 fi
 
 # ------------------------------------------------------------------ render
@@ -533,7 +553,7 @@ esc_repl() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\\&/g' -e 's/|/\\|
 
 render() {  # render <template> <destination>
   local tpl="$1" dst="$2"
-  if [ "$DRY_RUN" = 1 ]; then c_dim "  would render $(basename "$tpl") -> ${dst#$TARGET/}"; return; fi
+  if [ "$DRY_RUN" = 1 ]; then c_dim "  would render $(basename "$tpl") -> ${dst#$DEST/}"; return; fi
   sed \
     -e "s|{{PROJECT_NAME}}|$(esc_repl "$PROJECT_NAME")|g" \
     -e "s|{{STACK_LINE}}|$(esc_repl "$STACK")|g" \
@@ -561,24 +581,24 @@ c_grn "3. Rendering profile"
 # then refuse to run, every hook would stay on placeholders, and the upgrade
 # path documented in the README would silently un-configure the pipeline.
 if [ "$NO_DOCS" = 0 ]; then
-  if [ ! -f "$TARGET/docs/setup/PROFILE.md" ]; then
-    render "$SRC/templates/common/docs/setup/PROFILE.md.tmpl" "$TARGET/docs/setup/PROFILE.md"
+  if [ ! -f "$DEST/docs/setup/PROFILE.md" ]; then
+    render "$SRC/templates/common/docs/setup/PROFILE.md.tmpl" "$DEST/docs/setup/PROFILE.md"
   else
     c_dim "  docs/setup/PROFILE.md exists — left alone (it holds confirmed values)"
     if [ "$FORCE" = 1 ] && [ "$DRY_RUN" = 0 ]; then
-      render "$SRC/templates/common/docs/setup/PROFILE.md.tmpl" "$TARGET/docs/setup/PROFILE.studio.md"
+      render "$SRC/templates/common/docs/setup/PROFILE.md.tmpl" "$DEST/docs/setup/PROFILE.studio.md"
       # Surface fields this version expects that the existing profile lacks.
       new_fields=""
       while IFS= read -r label; do
-        grep -qF "| $label |" "$TARGET/docs/setup/PROFILE.md" || new_fields="$new_fields\n    - $label"
-      done < <(sed -n 's/^| \([^|]*[^ |]\) *|.*|.*|$/\1/p' "$TARGET/docs/setup/PROFILE.studio.md")
+        grep -qF "| $label |" "$DEST/docs/setup/PROFILE.md" || new_fields="$new_fields\n    - $label"
+      done < <(sed -n 's/^| \([^|]*[^ |]\) *|.*|.*|$/\1/p' "$DEST/docs/setup/PROFILE.studio.md")
       if [ -n "$new_fields" ]; then
         c_yel "  This version's profile has fields yours does not:"
         printf "%b\n" "$new_fields"
         c_dim "    Add them to docs/setup/PROFILE.md, confirm each, then re-run configure.sh."
         c_dim "    A rendered copy is at docs/setup/PROFILE.studio.md."
       else
-        rm -f "$TARGET/docs/setup/PROFILE.studio.md"
+        rm -f "$DEST/docs/setup/PROFILE.studio.md"
       fi
     fi
     c_dim "  To start the profile over, delete it and re-run."
@@ -587,16 +607,16 @@ fi
 
 c_grn "4. CLAUDE.md"
 CLAUDE_TMPL="$SRC/templates/tiers/$PLAN/CLAUDE.md.tmpl"
-if [ -f "$TARGET/CLAUDE.md" ]; then
+if [ -f "$DEST/CLAUDE.md" ]; then
   c_yel "  CLAUDE.md already exists — NOT overwritten."
   c_dim "  A $TIER_NAME version was written to CLAUDE.studio.md. Merge by hand."
-  render "$CLAUDE_TMPL" "$TARGET/CLAUDE.studio.md"
+  render "$CLAUDE_TMPL" "$DEST/CLAUDE.studio.md"
 else
-  render "$CLAUDE_TMPL" "$TARGET/CLAUDE.md"
+  render "$CLAUDE_TMPL" "$DEST/CLAUDE.md"
 fi
 
 c_grn "5. settings.json"
-S="$TARGET/.claude/settings.json"
+S="$DEST/.claude/settings.json"
 S_TMPL="$SRC/templates/tiers/$PLAN/settings.json.tmpl"
 if [ ! -f "$S" ]; then
   run "cp '$S_TMPL' '$S'"
@@ -614,12 +634,12 @@ elif command -v jq >/dev/null 2>&1; then
       c_yel "  merge failed:"
       sed 's/^/    /' "$S.err" >&2
       rm -f "$S.new" "$S.err"
-      cp "$S_TMPL" "$TARGET/.claude/settings.studio.json"
+      cp "$S_TMPL" "$DEST/.claude/settings.studio.json"
       c_yel "  wrote .claude/settings.studio.json instead. Merge by hand."
     fi
   fi
 else
-  run "cp '$S_TMPL' '$TARGET/.claude/settings.studio.json'"
+  run "cp '$S_TMPL' '$DEST/.claude/settings.studio.json'"
   c_yel "  jq missing — wrote .claude/settings.studio.json. Merge by hand."
 fi
 
@@ -631,6 +651,7 @@ if [ "$DRY_RUN" = 0 ]; then
   "tier_name": "$TIER_NAME",
   "version": "$VERSION",
   "phases": "$TIER_PHASES",
+  "layout": "$LAYOUT",
   "installed_at": "$(date -Iseconds 2>/dev/null || date)"
 }
 JSON
@@ -648,7 +669,8 @@ c_grn "7. .gitignore"
 # so committing them means a conflict on essentially every push, in a file
 # nobody reads during a merge. That is how a hook gets deleted, which costs more
 # than the aggregate would have been worth. No gate reads either one.
-if [ "$DRY_RUN" = 0 ]; then
+# Skipped in the external layout: the repository is not written, at all.
+if [ "$DRY_RUN" = 0 ] && [ -z "$EXT_HOME" ]; then
   for line in "CLAUDE.local.md" ".claude/settings.local.json" ".claude/.backup-*" \
               ".claude/agent-memory-local/" ".claude/state/filter-log.tsv" \
               ".claude/state/session-log.tsv" ".claude/state/gate.seal" \
@@ -666,15 +688,36 @@ c_grn "7b. .gitattributes"
 # conflict. This matters MORE with worktrees: each one has its own gate and
 # its own gate-log.tsv, and two of them merging back into the same branch is
 # exactly the scenario this line exists for.
-if [ "$DRY_RUN" = 0 ]; then
+if [ "$DRY_RUN" = 0 ] && [ -z "$EXT_HOME" ]; then
   line=".claude/state/gate-log.tsv merge=union"
   grep -qxF "$line" "$TARGET/.gitattributes" 2>/dev/null || echo "$line" >> "$TARGET/.gitattributes"
+fi
+
+if [ -n "$EXT_HOME" ]; then
+  c_grn "8. External layout: wiring $DEST to the project"
+  if [ "$DRY_RUN" = 0 ]; then
+    EXT_HOME_N="$(ext_native "$DEST")"; EXT_PROJ_N="$(ext_native "$TARGET")"
+    # One line naming the codebase. Its presence IS the external layout to
+    # every hook and script (studio_locate in _guard.sh).
+    printf '%s\n' "$EXT_PROJ_N" > "$DEST/.claude/project-dir"
+    ext_rewrite_settings "$DEST/.claude/settings.json" "$EXT_HOME_N"
+    EXT_DOCS=()
+    while IFS= read -r f; do EXT_DOCS+=("$f"); done < <(
+      find "$DEST/.claude/agents" "$DEST/.claude/skills" "$DEST/.claude/rules" -name '*.md' 2>/dev/null
+      for f in "$DEST/CLAUDE.md" "$DEST/CLAUDE.studio.md"; do [ -f "$f" ] && printf '%s\n' "$f"; done)
+    ext_rewrite_docs "$EXT_HOME_N" "${EXT_DOCS[@]}"
+    ext_write_launchers "$EXT_HOME_N" "$EXT_PROJ_N"
+    c_dim "  project:   $EXT_PROJ_N  (nothing written there)"
+    c_dim "  launchers: iptcvd-claude, iptcvd-claude.ps1, iptcvd-claude.cmd"
+  else
+    c_dim "  would write .claude/project-dir, absolute hook commands and the launchers"
+  fi
 fi
 
 # ------------------------------------------------------------------ report
 echo
 c_grn "Installed: $TIER_NAME  ($n_agents agents · $n_skills skills · $n_rules rules · $n_hooks hooks)"
-[ -d "$BACKUP" ] && c_dim "Backup: ${BACKUP#$TARGET/}"
+[ -d "$BACKUP" ] && c_dim "Backup: ${BACKUP#$DEST/}"
 echo
 c_bold "Phases"
 c_dim "  $(printf '%s' "$TIER_PHASES" | tr -s ' ' '\n' | paste -sd'>' - | sed 's/>/ -> /g')"
@@ -684,22 +727,22 @@ c_dim "  ${TIER_OPUS_AGENTS:-none}"
 echo
 c_yel "UNRESOLVED PLACEHOLDERS — the pipeline is inert until these are filled:"
 if [ "$DRY_RUN" = 0 ]; then
-  grep -rl '{{[A-Z_]*}}' "$TARGET/.claude" 2>/dev/null | sed "s|$TARGET/|  |" || echo "  none"
+  grep -rl '{{[A-Z_]*}}' "$DEST/.claude" 2>/dev/null | sed "s|$DEST/|  |" || echo "  none"
 fi
 echo
 cat <<__NEXTSTEPS__
 NEXT STEPS
 
-  1. Open docs/setup/PROFILE.md. Fill every NEEDS_REVIEW field.
+  1. Open ${EXT_HOME:+$DEST/}docs/setup/PROFILE.md. Fill every NEEDS_REVIEW field.
      Run each command yourself. A field is not confirmed until its
      command has executed. Watch for a watching test script -- that
      will hang the output filter.
 
   2. Fill the placeholders:
-        ./configure.sh --target "$TARGET"
+        ./configure.sh --target "$DEST"
 
   3. Prove the hooks fire:
-        ./verify.sh --target "$TARGET"
+        ./verify.sh --target "$DEST"
 
   4. In Claude Code:
         /doctor      # duplicate agents, oversized memory
@@ -712,6 +755,13 @@ NEXT STEPS
         $TIER_ENTRY_COMMAND
 
 __NEXTSTEPS__
+if [ -n "$EXT_HOME" ]; then
+  c_yel "EXTERNAL LAYOUT: start Claude Code ONLY through the launcher, never plain \`claude\`:"
+  c_dim "    $(ext_native "$DEST")/iptcvd-claude              (bash, macOS, Linux, Git Bash)"
+  c_dim "    $(ext_native "$DEST")/iptcvd-claude.ps1 / .cmd   (Windows PowerShell, cmd)"
+  c_dim "  Plain \`claude\` in the project loads no hooks, skills or pipeline instructions."
+  echo
+fi
 if [ "$PLAN" = "max20x" ]; then
   c_dim "Max 20x notes:"
   c_dim "  · Telemetry is wired but OFF. Set CLAUDE_CODE_ENABLE_TELEMETRY to \"1\" in"

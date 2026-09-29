@@ -56,7 +56,11 @@ HOOKDIR="$(cd "$(dirname "$SELF")" && pwd)"
 # shellcheck source=/dev/null
 . "$HOOKDIR/_guard.sh"
 
-cd "$HOOKDIR/../.." 2>/dev/null || exit 0
+studio_locate "$SELF"
+STUDIO_LOG_STATE="$STUDIO_STATE"
+# git runs in the CODEBASE; the snapshots and the gate live in the HOME. One
+# directory unless this is an external install.
+cd "$STUDIO_PROJECT" 2>/dev/null || exit 0
 studio_guard "$SELF" >/dev/null 2>&1 || exit 0
 
 # --- which event is this? -----------------------------------------------
@@ -83,7 +87,7 @@ OLDIFS="$IFS"; IFS='|'; set -- $ROOT_ALT; IFS="$OLDIFS"
 ROOTS="$*"
 MANIFESTS="package.json composer.json Cargo.toml go.mod pyproject.toml requirements.txt Gemfile build.gradle build.gradle.kts pom.xml"
 
-STAMP=".claude/state/.bash-audit-pre.tsv"
+STAMP="$STUDIO_STATE/.bash-audit-pre.tsv"
 
 # shellcheck disable=SC2086
 snapshot() {
@@ -109,16 +113,19 @@ snapshot() {
 # Both take knowing this scheme and leave a trail -- a commit, or a gate.json
 # with no matching gate.sh row in gate-log.tsv -- that a "just set the phase"
 # shortcut does not.
-GATE=".claude/state/gate.json"
-GATE_PRE=".claude/state/.bash-audit-gate.pre"
-GATE_PRE_SUM=".claude/state/.bash-audit-gate.sum"
+GATE="$STUDIO_STATE/gate.json"
+GATE_PRE="$STUDIO_STATE/.bash-audit-gate.pre"
+GATE_PRE_SUM="$STUDIO_STATE/.bash-audit-gate.sum"
 
 gate_change_is_sanctioned() {
   local now blob
   now=$(studio_gate_sum "$GATE")
   [ "$now" = "$(cat "$GATE_PRE_SUM" 2>/dev/null)" ] && return 0
   [ -f "$STUDIO_GATE_SEAL" ] && [ "$now" = "$(cat "$STUDIO_GATE_SEAL" 2>/dev/null)" ] && return 0
-  blob=$(git rev-parse -q --verify "HEAD:$GATE" 2>/dev/null) \
+  # The committed-HEAD exemption exists for a checkout or reset, and only means
+  # something when gate.json is IN the repository. An external home's is not.
+  [ "$STUDIO_EXTERNAL" = 1 ] && return 1
+  blob=$(git rev-parse -q --verify "HEAD:.claude/state/gate.json" 2>/dev/null) \
     && [ "$(git hash-object -- "$GATE" 2>/dev/null)" = "$blob" ] && return 0
   return 1
 }
@@ -130,14 +137,14 @@ audit_gate() {
   if [ -f "$GATE_PRE" ]; then cp "$GATE_PRE" "$GATE"; else rm -f "$GATE"; fi
   echo "BLOCKED: this Bash command rewrote .claude/state/gate.json without going" >&2
   echo "  through gate.sh. It has been put back to what it was before the command." >&2
-  echo "  The phase is changed with  bash .claude/scripts/gate.sh <phase> ...  --" >&2
+  echo "  The phase is changed with  $(studio_script_cmd gate.sh) <phase> ...  --" >&2
   echo "  that is where the transition checks live." >&2
   studio_log_gate bash-audit BYPASS - "$GATE" gate-rewritten
   exit 2
 }
 
 if [ "$MODE" = pre ]; then
-  mkdir -p .claude/state 2>/dev/null || true
+  mkdir -p "$STUDIO_STATE" 2>/dev/null || true
   snapshot > "$STAMP" 2>/dev/null || true
   if [ -f "$GATE" ]; then
     cp "$GATE" "$GATE_PRE" 2>/dev/null || true
@@ -153,11 +160,11 @@ audit_gate
 
 # --- post: only matters once the phase says source should be untouched ---
 PHASE=""
-if [ -f .claude/state/gate.json ]; then
+if [ -f "$GATE" ]; then
   if command -v jq >/dev/null 2>&1; then
-    PHASE=$(jq -r '.phase // ""' .claude/state/gate.json 2>/dev/null) || PHASE=""
+    PHASE=$(jq -r '.phase // ""' "$GATE" 2>/dev/null) || PHASE=""
   fi
-  [ -n "$PHASE" ] || PHASE=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' .claude/state/gate.json 2>/dev/null \
+  [ -n "$PHASE" ] || PHASE=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' "$GATE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//')
 fi
 [ -n "$PHASE" ] || PHASE="idle"
@@ -188,7 +195,7 @@ echo "  ones it does not." >&2
 printf '%s\n' "$NEW" | sed 's/^/    /' >&2
 FILELIST="$(printf '%s' "$NEW" | tr '\n' ' ')"
 echo "Revert it:  git checkout -- $FILELIST" >&2
-echo "Or open the gate properly:  bash .claude/scripts/gate.sh create --problem \"...\" --red \"...\"" >&2
+echo "Or open the gate properly:  $(studio_script_cmd gate.sh) create --problem \"...\" --red \"...\"" >&2
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   studio_log_gate bash-audit BYPASS "$PHASE" "$f" post-hoc

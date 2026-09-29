@@ -6,6 +6,9 @@ SELF="${BASH_SOURCE[0]}"
 # shellcheck source=/dev/null
 . "$(dirname "$SELF")/_guard.sh"
 studio_guard "$SELF" || exit 0
+studio_locate "$SELF"
+STUDIO_LOG_STATE="$STUDIO_STATE"
+cd "$STUDIO_PROJECT" 2>/dev/null || exit 0
 command -v git >/dev/null 2>&1 || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
@@ -33,12 +36,20 @@ CHANGED=$( { git diff --name-only HEAD 2>/dev/null
 # in flight; the document phase resets it to `idle`. So: nudge while in flight,
 # block once the work claims to be finished. The rule is unchanged -- source
 # cannot ship undocumented -- only the moment it is enforced.
-GATE=".claude/state/gate.json"
+GATE="$STUDIO_STATE/gate.json"
 PHASE="idle"
 [ -f "$GATE" ] && PHASE="$(json_field "$(cat "$GATE")" 'phase')"
 [ -n "${PHASE:-}" ] || PHASE="idle"
 
 DOCS_TOUCHED=$(git status --short docs/ 2>/dev/null)
+# EXTERNAL layout: the pipeline's own docs (specs, handoff notes) are written
+# in the home, which git does not see. A home doc written AFTER the first
+# changed source file counts -- otherwise every correct handoff would block.
+if [ -z "$DOCS_TOUCHED" ] && [ "$STUDIO_EXTERNAL" = 1 ] && [ -n "$CHANGED" ] && [ -d "$STUDIO_HOME/docs" ]; then
+  FIRST_SRC=$(printf '%s
+' "$CHANGED" | head -1)
+  [ -f "$FIRST_SRC" ] && DOCS_TOUCHED=$(find "$STUDIO_HOME/docs" -type f -newer "$FIRST_SRC" -print 2>/dev/null | head -1)
+fi
 
 if [ -z "$CHANGED" ]; then
   # No source in flight. A gate left open stops guarding anything, and the next
@@ -48,7 +59,7 @@ if [ -z "$CHANGED" ]; then
   case "$PHASE" in
     create|verify)
       echo "note: gate.json is still {\"phase\":\"$PHASE\"} and no source is changed." >&2
-      echo "      Left open it stops gating the next change:  bash .claude/scripts/gate.sh idle" >&2
+      echo "      Left open it stops gating the next change:  $(studio_script_cmd gate.sh) idle" >&2
       ;;
   esac
   exit 0

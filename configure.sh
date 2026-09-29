@@ -27,7 +27,7 @@ die()   { c_red "error: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --target) TARGET="$(cd "$2" && pwd)"; shift 2 ;;
+    --target|--home) TARGET="$(cd "$2" && pwd)"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --allow-incomplete) ALLOW_INCOMPLETE=1; shift ;;
     -h|--help)
@@ -35,6 +35,17 @@ while [ $# -gt 0 ]; do
     *) die "unknown option: $1" ;;
   esac
 done
+
+# TARGET is where the pipeline lives. PROJECT is the codebase it guards: the
+# same directory, unless install.sh --home put the pipeline outside the
+# repository and recorded the codebase in .claude/project-dir. Every check
+# about source roots, test roots and tracked code runs against PROJECT.
+PROJECT="$TARGET"
+if [ -f "$TARGET/.claude/project-dir" ]; then
+  IFS= read -r PROJECT < "$TARGET/.claude/project-dir" || true
+  PROJECT="${PROJECT%$'\r'}"
+  [ -d "$PROJECT" ] || die "the project recorded in .claude/project-dir does not exist: $PROJECT"
+fi
 
 P="$TARGET/docs/setup/PROFILE.md"
 [ -f "$P" ] || die "no profile at docs/setup/PROFILE.md — run install.sh first"
@@ -288,10 +299,10 @@ OLDIFS="$IFS"; IFS=','
 for _r in $SOURCE_ROOTS; do
   _r="$(printf '%s' "$_r" | tr -d ' ')"
   [ -n "$_r" ] || continue
-  if [ -d "$TARGET/$_r" ]; then
+  if [ -d "$PROJECT/$_r" ]; then
     _ROOTS_PRESENT=1
   else
-    c_yel "  warning: declared source root '$_r' does not exist as a directory under $TARGET."
+    c_yel "  warning: declared source root '$_r' does not exist as a directory under $PROJECT."
   fi
   SOURCE_ROOTS_ESC="${SOURCE_ROOTS_ESC:+$SOURCE_ROOTS_ESC|}$(_ere_escape "$_r")"
 done
@@ -305,7 +316,7 @@ SOURCE_ROOTS_REGEX="^($SOURCE_ROOTS_ESC)(/|$)"
 # One missing root among real ones stays a warning above; all of them missing
 # is a profile describing some other repository.
 if [ "$_ROOTS_PRESENT" = 0 ]; then
-  c_red "error: none of the declared source roots ($SOURCE_ROOTS) exists under $TARGET."
+  c_red "error: none of the declared source roots ($SOURCE_ROOTS) exists under $PROJECT."
   c_dim "  The gate would guard nothing here while every check reports success."
   c_dim "  Set 'Source roots' in docs/setup/PROFILE.md to the directories that hold"
   c_dim "  this project's code. For a project with no code yet, create the directory"
@@ -320,7 +331,7 @@ fi
 # trees never show up here.
 _CODE_EXT='\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|go|rs|php|rb|java|kt|kts|scala|cs|vb|fs|cshtml|razor|aspx|ascx|swift|c|cc|cpp|h|hpp|sql)$'
 _UNCOVERED=""
-if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   while IFS= read -r _d; do
     [ -n "$_d" ] || continue
     case "$_d" in
@@ -332,7 +343,7 @@ if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       case "$_r" in "$_d"|"$_d"/*) _covered=1 ;; esac
     done
     [ "$_covered" = 1 ] || _UNCOVERED="${_UNCOVERED:+$_UNCOVERED, }$_d"
-  done < <(git -C "$TARGET" -c core.quotePath=false ls-files 2>/dev/null \
+  done < <(git -C "$PROJECT" -c core.quotePath=false ls-files 2>/dev/null \
              | grep -iE "$_CODE_EXT" | grep / | cut -d/ -f1 | sort -u)
 fi
 if [ -n "$_UNCOVERED" ]; then
@@ -367,8 +378,8 @@ for _r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' '); do
       ;;
   esac
 done
-if [ -n "$TEST_ROOT" ] && [ ! -d "$TARGET/$TEST_ROOT" ]; then
-  c_yel "  warning: declared test root '$TEST_ROOT' does not exist as a directory under $TARGET."
+if [ -n "$TEST_ROOT" ] && [ ! -d "$PROJECT/$TEST_ROOT" ]; then
+  c_yel "  warning: declared test root '$TEST_ROOT' does not exist as a directory under $PROJECT."
 fi
 
 if [ -n "$SHARED_SURFACES" ]; then
@@ -377,7 +388,7 @@ if [ -n "$SHARED_SURFACES" ]; then
   for _s in $SHARED_SURFACES; do
     _s="$(printf '%s' "$_s" | tr -d ' ')"
     [ -n "$_s" ] || continue
-    [ -d "$TARGET/$_s" ] || c_yel "  warning: declared shared surface '$_s' does not exist as a directory under $TARGET."
+    [ -d "$PROJECT/$_s" ] || c_yel "  warning: declared shared surface '$_s' does not exist as a directory under $PROJECT."
     SHARED_SURFACES_ESC="${SHARED_SURFACES_ESC:+$SHARED_SURFACES_ESC|}$(_ere_escape "$_s")"
   done
   IFS="$OLDIFS"

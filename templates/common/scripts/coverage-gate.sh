@@ -22,15 +22,19 @@
 # failing a build over a figure nobody has seen. Commit that number to arm it;
 # the run prints the exact command.
 set -uo pipefail
-cd "$(dirname "$0")/../.." || exit 1
+# shellcheck source=/dev/null
+. "$(dirname "$0")/../hooks/_guard.sh" || { echo "$(basename "$0"): cannot find ../hooks/_guard.sh" >&2; exit 1; }
+studio_locate "$0"
+# The coverage file is named relative to the CODEBASE; the floor is state.
+cd "$STUDIO_PROJECT" || exit 1
 
-FLOOR_FILE=".claude/state/coverage-floor.txt"
+FLOOR_FILE="$STUDIO_STATE/coverage-floor.txt"
 SLACK=5           # percentage points of drift tolerated before demanding a raise
 OUT="${1:-}"
 
 if [ -z "$OUT" ] || [ ! -f "$OUT" ]; then
   echo "coverage-gate: need the test output file" >&2
-  echo "  usage: <test command> | tee coverage.txt && bash .claude/scripts/coverage-gate.sh coverage.txt" >&2
+  echo "  usage: <test command> | tee coverage.txt && $(studio_script_cmd coverage-gate.sh) coverage.txt" >&2
   exit 1
 fi
 

@@ -269,7 +269,7 @@ mutate filter-cap-removed test/hooks.sh \
 # what it saved, so the number goes back to being a claim.
 mutate filter-stops-recording test/hooks.sh \
   templates/common/hooks/filter-output.sh \
-  '>> .claude/state/filter-log.tsv' \
+  '>> \"$STATE_LOGGED/filter-log.tsv\"' \
   '>> /dev/null' \
   'the output filter stops recording what it saved'
 

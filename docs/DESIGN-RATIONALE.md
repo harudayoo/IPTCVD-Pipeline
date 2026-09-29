@@ -10,7 +10,7 @@ date: "August 2026"
 > nine" plus `qa-runner` and `security-auditor`; `--plan pro` builds the smaller
 > 7-agent pipeline documented in [`SETUP-SPEC.md`](SETUP-SPEC.md).
 >
-> Every tier shares §10's seven hooks, §5's memory architecture, and §2's gate
+> Every tier shares §10's eight hooks, §5's memory architecture, and §2's gate
 > discipline unchanged. The tiers differ in roster size and verification
 > fan-out, not in how strict the gates are. Read §0.2, §11 and §14 before
 > choosing a tier — the honest constraints, the token economics and the
@@ -1037,7 +1037,7 @@ Then run the polish sequence in order — design, craft, accessibility, performa
 
 # 10. Enforcement: hooks and permissions
 
-Prompts are advisory; hooks are deterministic. These seven hooks are what turn a set of nicely-worded agent prompts into an actual process. Four of them were the original design; §10.5 exists because that design had a door in it, §10.6 because §10.5 is a parser and a parser always misses a shape eventually, and §10.7 because two of the design's load-bearing claims about token spend were measured by nothing.
+Prompts are advisory; hooks are deterministic. These eight hooks are what turn a set of nicely-worded agent prompts into an actual process. Four of them were the original design; §10.5 exists because that design had a door in it, §10.6 because §10.5 is a parser and a parser always misses a shape eventually, §10.7 because two of the design's load-bearing claims about token spend were measured by nothing, and `prompt-context` because an agent that was told the rules once, at the start, was reported drifting off them mid-session.
 
 ## 10.1 Hook 1 — the phase gate
 
@@ -1669,7 +1669,7 @@ Run this once. It gets your app running from a clean environment, captures the i
 
 ## Phase 5 — Enforcement (Day 4, 2 hours)
 
-Write the seven hooks from §10, `chmod +x .claude/hooks/*.sh`, wire `settings.json`, then **test each one deliberately**:
+Write the eight hooks from §10, `chmod +x .claude/hooks/*.sh`, wire `settings.json`, then **test each one deliberately**:
 
 ```
 # Should be blocked (gate is not in 'create')
@@ -1840,7 +1840,7 @@ Every discipline you listed, and where it lives in the system.
 
 **It will not:** replace your judgement at the gates. Every gate in this design ends with you approving something. That is deliberate — the gates are where a bad plan gets caught cheaply, and an approval you rubber-stamp is a gate that does not exist. The moment you approve without reading, the pipeline degrades into an expensive way to generate confident-looking output.
 
-**Start small.** Nine agents, seven hooks, six skills, two MCP servers, one pilot feature. Everything in this document beyond that is an optimisation you should only add once you can point at the specific problem it solves.
+**Start small.** Nine agents, eight hooks, six skills, two MCP servers, one pilot feature. Everything in this document beyond that is an optimisation you should only add once you can point at the specific problem it solves.
 
 ---
 

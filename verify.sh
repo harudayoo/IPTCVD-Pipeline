@@ -12,8 +12,18 @@ set -uo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$(pwd)"
-[ "${1:-}" = "--target" ] && { TARGET="$(cd "$2" && pwd)"; shift 2; }
+case "${1:-}" in --target|--home) TARGET="$(cd "$2" && pwd)"; shift 2 ;; esac
 cd "$TARGET" || { echo "cannot enter $TARGET" >&2; exit 1; }
+
+# TARGET is where the pipeline lives; PROJECT is the codebase it guards. The
+# same directory unless install.sh --home put the pipeline outside the repo.
+# Hooks are run the way Claude Code runs them: from the PROJECT, by path.
+PROJECT="$TARGET"
+if [ -f .claude/project-dir ]; then
+  IFS= read -r PROJECT < .claude/project-dir || true
+  PROJECT="${PROJECT%$'\r'}"
+fi
+HOOKS="$TARGET/.claude/hooks"
 
 PASS=0; FAIL=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
@@ -22,8 +32,8 @@ head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 [ -d .claude/hooks ] || { echo "no .claude/hooks — run install.sh first"; exit 1; }
 
-hook() { printf '%s' "$2" | bash ".claude/hooks/$1" 2>/dev/null; }
-rc_of() { printf '%s' "$2" | bash ".claude/hooks/$1" >/dev/null 2>&1; echo $?; }
+hook() { ( cd "$PROJECT" && printf '%s' "$2" | bash "$HOOKS/$1" 2>/dev/null ); }
+rc_of() { ( cd "$PROJECT" && printf '%s' "$2" | bash "$HOOKS/$1" >/dev/null 2>&1 ); echo $?; }
 
 # ------------------------------------------------------------- installed tier
 read_tier() {
@@ -100,7 +110,7 @@ IFS="$OLDIFS"
 # source-root regex does not match it, so this suite once passed while the
 # gate was inert in production: it fed the one relative spelling that happened
 # to work. Test what ships, not what is convenient to type.
-[ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"$TARGET/$SRC_FILE\"}}")" = 2 ] \
+[ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"$PROJECT/$SRC_FILE\"}}")" = 2 ] \
   && pass "blocks the ABSOLUTE spelling of $SRC_FILE" \
   || fail "blocks the ABSOLUTE spelling of $SRC_FILE - the gate is inert in real use"
 [ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"./$SRC_FILE\"}}")" = 2 ] \
@@ -327,7 +337,7 @@ else
     jq -r --arg e "$ev" '.hooks[$e][] | "\(.matcher // "*")\t\(.hooks[0].command // "?")"' \
       .claude/settings.json 2>/dev/null | while IFS="$(printf '\t')" read -r m c; do
         case "$c" in
-          .claude/hooks/*) printf '  \033[2m%-13s %-12s %s\033[0m\n' "$ev" "$m" "$c" ;;
+          .claude/hooks/*|*/.claude/hooks/*) printf '  \033[2m%-13s %-12s %s\033[0m\n' "$ev" "$m" "$c" ;;
           *)               printf '  \033[33m%-13s %-12s %s  (third-party)\033[0m\n' "$ev" "$m" "$c" ;;
         esac
       done
@@ -342,7 +352,7 @@ else
     fi
   done
   studio_hooks=$(jq '[.hooks | to_entries[] | .value[] | .hooks[]?
-                      | select(.command // "" | startswith(".claude/hooks/"))] | length' \
+                      | select(.command // "" | test("(^|/)\\.claude/hooks/"))] | length' \
                  .claude/settings.json 2>/dev/null || echo 0)
   n_expected=$(find .claude/hooks -name '_*' -prune -o -name '*.sh' -print 2>/dev/null | wc -l | tr -d ' ')
   [ "${studio_hooks:-0}" -ge "${n_expected:-5}" ] \

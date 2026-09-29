@@ -38,8 +38,10 @@ head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 W="$(mktemp -d)"
 trap 'cd /; rm -rf "$W"' EXIT INT TERM HUP
-mkdir -p "$W/.claude/scripts" "$W/.claude/state"
+mkdir -p "$W/.claude/scripts" "$W/.claude/state" "$W/.claude/hooks"
 cp "$SRC/templates/common/scripts/coverage-gate.sh" "$W/.claude/scripts/coverage-gate.sh"
+# The scripts locate the pipeline through _guard.sh, as every install ships it.
+cp "$SRC/templates/common/hooks/_guard.sh" "$W/.claude/hooks/_guard.sh"
 cd "$W" || exit 1
 
 gate() { bash .claude/scripts/coverage-gate.sh "$@" 2>&1; }

@@ -50,7 +50,7 @@ printf '\033[2m%s\033[0m\n' "$SRC"
 
 # ---------------------------------------------------------------- 1. syntax
 head_ "1. Syntax"
-for f in install.sh configure.sh verify.sh qa.sh test/*.sh templates/common/hooks/*.sh templates/common/scripts/*.sh; do
+for f in install.sh configure.sh verify.sh qa.sh lib/*.sh test/*.sh templates/common/hooks/*.sh templates/common/scripts/*.sh; do
   bash -n "$f" 2>/dev/null && pass "bash: $(basename "$f")" || fail "bash: $f"
 done
 if command -v python3 >/dev/null 2>&1; then
@@ -469,6 +469,22 @@ elif [ -f test/coverage.sh ]; then
   fi
 else
   fail "test/coverage.sh exists"
+fi
+
+# The external layout (install.sh --home) exists for repositories that may not
+# hold pipeline files. Its promises are that the repository is never written
+# and that every path the model is told about exists -- both silent when they
+# break, which is why the suite checks them rather than the happy path.
+if [ "$QA_SKIP_SUITES" = 1 ]; then
+  :
+elif [ -f test/external.sh ]; then
+  if bash test/external.sh >/dev/null 2>&1; then
+    pass "the external layout guards the repo from outside it and never writes to it"
+  else
+    fail "test/external.sh fails -- run it directly"
+  fi
+else
+  fail "test/external.sh exists"
 fi
 
 printf '\n\033[1m%d passed, %d failed, %d warnings\033[0m\n' "$PASS" "$FAIL" "$WARN"

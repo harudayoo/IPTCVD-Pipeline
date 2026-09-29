@@ -44,6 +44,10 @@
       { "_comment": "Records how each session began and what the gate was doing. Pure measurement, fails open, read by no gate. /clear between phases is the largest token lever here and the only major one nothing measured; this cannot enforce it, it makes it visible — the same move as hook-integrity.sh. Read with: bash .claude/scripts/savings.sh",
         "matcher": "startup|clear|compact|resume",
         "hooks": [{ "type": "command", "command": ".claude/hooks/session-log.sh" }] }
+    ],
+    "UserPromptSubmit": [
+      { "_comment": "One or two lines before every prompt: the gate phase and, in the external layout, where the pipeline lives. SessionStart alone did not stop an agent drifting off the pipeline mid-session; this keeps the phase the most recent thing it was told. Fails open and silent.",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/prompt-context.sh" }] }
     ]
   }
 }
