@@ -210,12 +210,14 @@ jobs:
         run: |
           shellcheck -S warning -e SC1090,SC1091,SC2294 \
             install.sh configure.sh verify.sh qa.sh lib/*.sh \
-            test/*.sh templates/common/scripts/*.sh
-          # The hook templates carry {{PLACEHOLDERS}} that are not valid shell
-          # until configure.sh substitutes them, so they are checked as the
-          # test fixture renders them instead of in raw form.
+            test/*.sh
+          # The hook and script templates carry {{PLACEHOLDERS}} that are not
+          # valid shell until configure.sh substitutes them, so they are checked
+          # as the test fixture renders them instead of in raw form.
+          # EXTRA_TEST_PATTERNS renders empty, as it does for a profile that
+          # declares none.
           tmp=$(mktemp -d)
-          for f in templates/common/hooks/*.sh; do
+          for f in templates/common/hooks/*.sh templates/common/scripts/*.sh; do
             sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
                 -e 's|{{SHARED_SURFACE_REGEX}}|^(src/components)/|g' \
                 -e 's|{{TEST_ROOT}}|tests|g' \
@@ -226,6 +228,7 @@ jobs:
                 -e 's|{{FORMAT_COMMAND}}|prettier -w|g' \
                 -e 's|{{FORMAT_GLOB}}|*.ts|g' \
                 -e 's|{{TYPECHECK_GLOB}}|*.ts|g' \
+                -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
                 "$f" > "$tmp/$(basename "$f")"
           done
           shellcheck -S warning -e SC1090,SC1091 "$tmp"/*.sh

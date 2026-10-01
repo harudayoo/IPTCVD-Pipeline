@@ -460,7 +460,8 @@ process_segments() {
         done
         ;;
       tar)
-        case "${1:-}" in *x*|--extract*) block_bulk_rewrite "tar -x" ;; esac
+        # *x* covers -x, xf and --extract alike.
+        case "${1:-}" in *x*) block_bulk_rewrite "tar -x" ;; esac
         ;;
       unzip)
         block_bulk_rewrite "unzip"

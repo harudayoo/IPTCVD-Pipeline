@@ -7,6 +7,8 @@ SELF="${BASH_SOURCE[0]}"
 . "$(dirname "$SELF")/_guard.sh"
 studio_guard "$SELF" || exit 0
 studio_locate "$SELF"
+# Read by studio_log_gate in _guard.sh.
+# shellcheck disable=SC2034
 STUDIO_LOG_STATE="$STUDIO_STATE"
 cd "$STUDIO_PROJECT" 2>/dev/null || exit 0
 command -v git >/dev/null 2>&1 || exit 0

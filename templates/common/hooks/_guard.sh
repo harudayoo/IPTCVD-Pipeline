@@ -17,6 +17,7 @@
 # meant to write actually failed. Declared once: filter-output.sh's rewrite
 # and gate.sh's `test --red-cmd` both match against this, so the definition of
 # "looks like a real failure" cannot drift between the two doors that check it.
+# shellcheck disable=SC2034  # read by the scripts that source this file
 STUDIO_ASSERTION_PATTERN='(FAIL|ERROR|Error|error:|✕|✗|✘|✖|^ *[0-9]+:[0-9]+ +(error|warning)|problems? \(|assert|Exception|vulnerabilit|advisor|Timed out|^ *Tests?: |^ *Duration: |\[OK\]|built in |No security vulnerability|[0-9]+ (passed|failed|vulnerabilities))'
 
 # ------------------------------------------------------------- where things are

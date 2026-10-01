@@ -75,6 +75,8 @@ fi
 # PROJECT. The same directory unless this is an external install (see
 # studio_locate in _guard.sh).
 studio_locate "$SELF"
+# Read by studio_log_gate in _guard.sh.
+# shellcheck disable=SC2034
 STUDIO_LOG_STATE="$STUDIO_STATE"
 cd "$STUDIO_PROJECT" || { echo "gate.sh: cannot enter the project at $STUDIO_PROJECT" >&2; exit 1; }
 GATE="$STUDIO_STATE/gate.json"
@@ -298,7 +300,7 @@ EOF
     # red_cmd (an `n/a: <reason>` slice, or an old gate.json from before this
     # existed) has nothing to re-run and is waved through unchanged.
     if [ "$NEXT" = "verify" ] && [ -n "${RED_CMD:-}" ]; then
-      VOUT=$(eval "$RED_CMD" 2>&1); VRC=$?
+      eval "$RED_CMD" >/dev/null 2>&1; VRC=$?
       if [ "$VRC" -ne 0 ]; then
         echo "refusing to advance to verify: the recorded red command still fails" >&2
         echo "  (exit $VRC). CREATE exists to turn it green before VERIFY begins." >&2

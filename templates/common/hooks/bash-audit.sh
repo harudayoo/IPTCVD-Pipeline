@@ -57,6 +57,8 @@ HOOKDIR="$(cd "$(dirname "$SELF")" && pwd)"
 . "$HOOKDIR/_guard.sh"
 
 studio_locate "$SELF"
+# Read by studio_log_gate in _guard.sh.
+# shellcheck disable=SC2034
 STUDIO_LOG_STATE="$STUDIO_STATE"
 # git runs in the CODEBASE; the snapshots and the gate live in the HOME. One
 # directory unless this is an external install.

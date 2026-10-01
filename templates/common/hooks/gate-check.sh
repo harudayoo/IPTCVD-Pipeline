@@ -70,6 +70,8 @@ SHARED_SURFACE="{{SHARED_SURFACE_REGEX}}"
 # find the home's own gate.json for a file inside the home, which strips that
 # file to `.claude/...`/`docs/...` relative to the home -- exactly the shape
 # the enforcement-file and allow rules below already judge.
+# STUDIO_LOG_STATE is read by studio_log_gate in _guard.sh.
+# shellcheck disable=SC2034
 if [ -n "$STUDIO_ROOT" ] && { [ "$STUDIO_EXTERNAL" = 0 ] || [ -f "$STUDIO_ROOT/.claude/state/gate.json" ]; }; then
   GATE="$STUDIO_ROOT/.claude/state/gate.json"
   STUDIO_LOG_STATE="$STUDIO_ROOT/.claude/state"
