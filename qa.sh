@@ -50,7 +50,7 @@ printf '\033[2m%s\033[0m\n' "$SRC"
 
 # ---------------------------------------------------------------- 1. syntax
 head_ "1. Syntax"
-for f in install.sh configure.sh verify.sh qa.sh test/*.sh templates/common/hooks/*.sh templates/common/scripts/*.sh; do
+for f in install.sh configure.sh verify.sh qa.sh lib/*.sh test/*.sh templates/common/hooks/*.sh templates/common/scripts/*.sh; do
   bash -n "$f" 2>/dev/null && pass "bash: $(basename "$f")" || fail "bash: $f"
 done
 if command -v python3 >/dev/null 2>&1; then
@@ -330,10 +330,17 @@ head_ "11. Guard hygiene"
 # that the hooks now carry a comment ABOUT, and a check that fires on its own
 # documentation is a check people learn to ignore.
 uncommented() { sed 's/[[:space:]]*#.*$//' "$1"; }
+# uncommented_has <file> <grep args...>
+# Never `uncommented f | grep -q`: under pipefail, grep -q exits on the first
+# match, sed takes SIGPIPE writing the rest, and the pipeline reports 141 -- a
+# FOUND pattern reads as not found. On Linux that turned the substring-allow
+# check below green with *test* sitting in the gate. Process substitution keeps
+# sed's status out of the result.
+uncommented_has() { local f="$1"; shift; grep -q "$@" <(uncommented "$f"); }
 
 subbad=0
 for f in templates/common/hooks/*.sh; do
-  uncommented "$f" | grep -qE 'case "\$CMD" in.*\*"\.claude' && {
+  uncommented_has "$f" -E 'case "\$CMD" in.*\*"\.claude' && {
     fail "$(basename "$f"): exempts commands by substring match on caller-controlled text"
     subbad=1
   }
@@ -343,7 +350,7 @@ done
 # An allow rule has to name a LOCATION, not a substring. `*test*` ungates every
 # source file whose name merely contains those letters -- LatestReport.ts,
 # InspectorController.ts -- and both walked past a closed gate.
-if uncommented templates/common/hooks/gate-check.sh | grep -qE '\*test\*|\*spec\*|\*Test\*'; then
+if uncommented_has templates/common/hooks/gate-check.sh -E '\*test\*|\*spec\*|\*Test\*'; then
   fail "gate-check.sh allows paths by unanchored substring (*test*/*spec*)"
 else
   pass "gate-check allow rules are anchored to locations, not substrings"
@@ -360,7 +367,7 @@ fi
 
 # A pipeline reports its LAST command's status, so `cmd | grep | head` turns a
 # red suite green -- and every VERIFY gate downstream reads that 0 as evidence.
-if uncommented templates/common/hooks/filter-output.sh | grep -q 'PIPESTATUS'; then
+if uncommented_has templates/common/hooks/filter-output.sh 'PIPESTATUS'; then
   pass "filter-output preserves the original exit status"
 else
   fail "filter-output preserves exit status (without it a failing suite reports success)"
@@ -469,6 +476,22 @@ elif [ -f test/coverage.sh ]; then
   fi
 else
   fail "test/coverage.sh exists"
+fi
+
+# The external layout (install.sh --home) exists for repositories that may not
+# hold pipeline files. Its promises are that the repository is never written
+# and that every path the model is told about exists -- both silent when they
+# break, which is why the suite checks them rather than the happy path.
+if [ "$QA_SKIP_SUITES" = 1 ]; then
+  :
+elif [ -f test/external.sh ]; then
+  if bash test/external.sh >/dev/null 2>&1; then
+    pass "the external layout guards the repo from outside it and never writes to it"
+  else
+    fail "test/external.sh fails -- run it directly"
+  fi
+else
+  fail "test/external.sh exists"
 fi
 
 printf '\n\033[1m%d passed, %d failed, %d warnings\033[0m\n' "$PASS" "$FAIL" "$WARN"

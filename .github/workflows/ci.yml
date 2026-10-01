@@ -86,6 +86,47 @@ jobs:
         # syntax error that dies on every Bash call.
         run: bash test/profile-validation.sh
 
+  external:
+    name: External layout · the repo is never written
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh --home, configure, verify, and the hooks from outside the repo
+        run: bash test/external.sh
+
+  windows:
+    name: Windows · Git Bash and PowerShell entry points
+    # Native Windows is where the path spellings diverge (C:/x, C:\x, /c/x),
+    # where user profiles put a space in the pipeline home, and where the
+    # first `bash` on PATH may be WSL's. Every one of those broke something
+    # silently before this job existed.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hook behaviour
+        run: bash test/hooks.sh
+      - name: External layout
+        run: bash test/external.sh
+      - name: Lifecycle
+        run: bash test/integration.sh
+      - name: install.ps1 from PowerShell, relative Windows paths, a space in the home
+        shell: pwsh
+        run: |
+          $w = Join-Path $env:RUNNER_TEMP 'ps'
+          New-Item -ItemType Directory -Force "$w\repo\src" | Out-Null
+          git -C "$w\repo" init -q
+          Set-Content "$w\repo\src\a.ts" 'export const a = 1'
+          Push-Location $w
+          & "$env:GITHUB_WORKSPACE\install.ps1" --plan pro --target .\repo --home '.\pipe home'
+          $rc = $LASTEXITCODE
+          Pop-Location
+          if ($rc -ne 0) { throw "install.ps1 failed" }
+          if (Get-ChildItem -Force "$w\repo" | Where-Object Name -ne '.git' | Where-Object Name -ne 'src') { throw "install.ps1 wrote into the repository" }
+          if (-not (Test-Path "$w\pipe home\iptcvd-claude.ps1")) { throw "no PowerShell launcher" }
+
   ratchet:
     name: Ratchet · does it actually ratchet
     runs-on: ubuntu-latest
@@ -168,13 +209,15 @@ jobs:
         #                  twice and letting the two drift.
         run: |
           shellcheck -S warning -e SC1090,SC1091,SC2294 \
-            install.sh configure.sh verify.sh qa.sh \
-            test/*.sh templates/common/scripts/*.sh
-          # The hook templates carry {{PLACEHOLDERS}} that are not valid shell
-          # until configure.sh substitutes them, so they are checked as the
-          # test fixture renders them instead of in raw form.
+            install.sh configure.sh verify.sh qa.sh lib/*.sh \
+            test/*.sh
+          # The hook and script templates carry {{PLACEHOLDERS}} that are not
+          # valid shell until configure.sh substitutes them, so they are checked
+          # as the test fixture renders them instead of in raw form.
+          # EXTRA_TEST_PATTERNS renders empty, as it does for a profile that
+          # declares none.
           tmp=$(mktemp -d)
-          for f in templates/common/hooks/*.sh; do
+          for f in templates/common/hooks/*.sh templates/common/scripts/*.sh; do
             sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)/|g' \
                 -e 's|{{SHARED_SURFACE_REGEX}}|^(src/components)/|g' \
                 -e 's|{{TEST_ROOT}}|tests|g' \
@@ -185,6 +228,7 @@ jobs:
                 -e 's|{{FORMAT_COMMAND}}|prettier -w|g' \
                 -e 's|{{FORMAT_GLOB}}|*.ts|g' \
                 -e 's|{{TYPECHECK_GLOB}}|*.ts|g' \
+                -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
                 "$f" > "$tmp/$(basename "$f")"
           done
           shellcheck -S warning -e SC1090,SC1091 "$tmp"/*.sh

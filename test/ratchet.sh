@@ -28,9 +28,11 @@ head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 W="$(mktemp -d)"
 trap 'cd /; rm -rf "$W"' EXIT INT TERM HUP
 
-mkdir -p "$W/.claude/scripts" "$W/.claude/state" "$W/src"
+mkdir -p "$W/.claude/scripts" "$W/.claude/state" "$W/.claude/hooks" "$W/src"
 sed 's|{{SOURCE_ROOTS}}|src|g' "$SRC/templates/common/scripts/ratchet.sh" \
   > "$W/.claude/scripts/ratchet.sh"
+# The scripts locate the pipeline through _guard.sh, as every install ships it.
+cp "$SRC/templates/common/hooks/_guard.sh" "$W/.claude/hooks/_guard.sh"
 cd "$W" || exit 1
 
 # lines <file> <n>   -- write a file of exactly n lines

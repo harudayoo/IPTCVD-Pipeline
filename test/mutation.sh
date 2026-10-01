@@ -220,8 +220,8 @@ mutate readme-count-drift qa.sh \
 # A reader who counts four goes looking for four and finds four.
 mutate hook-count-drift qa.sh \
   docs/DESIGN-RATIONALE.md \
+  "Every tier shares §10's eight hooks" \
   "Every tier shares §10's seven hooks" \
-  "Every tier shares §10's six hooks" \
   'the docs name a hook count the shipped hooks contradict'
 
 # The count can stay honest while a hook sits inert: five files in
@@ -269,7 +269,7 @@ mutate filter-cap-removed test/hooks.sh \
 # what it saved, so the number goes back to being a claim.
 mutate filter-stops-recording test/hooks.sh \
   templates/common/hooks/filter-output.sh \
-  '>> .claude/state/filter-log.tsv' \
+  '>> \"$STATE_LOGGED/filter-log.tsv\"' \
   '>> /dev/null' \
   'the output filter stops recording what it saved'
 

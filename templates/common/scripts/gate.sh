@@ -70,8 +70,16 @@ else
   exit 1
 fi
 
-cd "$(dirname "$0")/../.." || exit 1
-GATE=".claude/state/gate.json"
+# State is read and written in the HOME; everything else -- `--red-cmd`, the
+# git calls that record which test files produced the red -- runs in the
+# PROJECT. The same directory unless this is an external install (see
+# studio_locate in _guard.sh).
+studio_locate "$SELF"
+# Read by studio_log_gate in _guard.sh.
+# shellcheck disable=SC2034
+STUDIO_LOG_STATE="$STUDIO_STATE"
+cd "$STUDIO_PROJECT" || { echo "gate.sh: cannot enter the project at $STUDIO_PROJECT" >&2; exit 1; }
+GATE="$STUDIO_STATE/gate.json"
 
 # JSON-escape: backslash and quote, then control characters that would break
 # the file. These values arrive from a human sentence, not a machine.
@@ -272,7 +280,7 @@ EOF
         if [ -z "$PROBLEM" ] || [ -z "$RED" ]; then
           echo "refusing to advance to '$NEXT': the slice on record carries no problem/red note." >&2
           echo "  Open it properly instead:" >&2
-          echo "    bash .claude/scripts/gate.sh $NEXT --problem \"<what breaks>\" --red \"<the failing test, or n/a: why>\"" >&2
+          echo "    $(studio_script_cmd gate.sh) $NEXT --problem \"<what breaks>\" --red \"<the failing test, or n/a: why>\"" >&2
           exit 1
         fi
         if ! studio_validate_notes "$PROBLEM" "$RED" "$REUSE" "$DEPS"; then
@@ -292,7 +300,7 @@ EOF
     # red_cmd (an `n/a: <reason>` slice, or an old gate.json from before this
     # existed) has nothing to re-run and is waved through unchanged.
     if [ "$NEXT" = "verify" ] && [ -n "${RED_CMD:-}" ]; then
-      VOUT=$(eval "$RED_CMD" 2>&1); VRC=$?
+      eval "$RED_CMD" >/dev/null 2>&1; VRC=$?
       if [ "$VRC" -ne 0 ]; then
         echo "refusing to advance to verify: the recorded red command still fails" >&2
         echo "  (exit $VRC). CREATE exists to turn it green before VERIFY begins." >&2
@@ -329,7 +337,7 @@ EOF
     ;;
 
   log)
-    LOG=".claude/state/gate-log.tsv"
+    LOG="$STUDIO_STATE/gate-log.tsv"
     if [ ! -f "$LOG" ]; then echo "no decisions recorded yet"; exit 0; fi
     printf '%-22s %-11s %-6s %-8s %s\n' WHEN HOOK VERDICT PHASE TARGET
     tail -"${1:-40}" "$LOG" | while IFS=$'\t' read -r ts hook verdict phase target reason; do
@@ -381,7 +389,7 @@ EOF
       echo "refusing to open the gate: $MISSING missing." >&2
       echo "  --problem is the IDEA phase; --red is the TEST phase. Both are one sentence." >&2
       echo "  Record real evidence first, and this fills itself in:" >&2
-      echo "    bash .claude/scripts/gate.sh test --red-cmd \"<the failing test command>\"" >&2
+      echo "    $(studio_script_cmd gate.sh) test --red-cmd \"<the failing test command>\"" >&2
       echo "  No failing test to point at? Say so by hand: --red \"n/a: <why>\"" >&2
       exit 1
     fi
@@ -396,7 +404,7 @@ EOF
 
     mkdir -p "$(dirname "$GATE")"
     write_gate "$CMD"
-    echo "gate: $CMD — source edits unblocked. Reset at handoff: bash .claude/scripts/gate.sh idle"
+    echo "gate: $CMD — source edits unblocked. Reset at handoff: $(studio_script_cmd gate.sh) idle"
 
     # Which KIND of --red this is, logged once per open/re-open: a real
     # `test --red-cmd` record, an honest "n/a: <reason>", or a free-text

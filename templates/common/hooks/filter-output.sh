@@ -8,6 +8,7 @@ SELF="${BASH_SOURCE[0]}"
 
 INPUT=$(cat)
 studio_guard "$SELF" || { echo '{}'; exit 0; }
+studio_locate "$SELF"
 
 CMD="$(json_field "$INPUT" 'tool_input.command')"
 [ -z "${CMD:-}" ] && { echo '{}'; exit 0; }
@@ -109,21 +110,27 @@ FILTER="grep -B2 -A8 -E '$STUDIO_ASSERTION_PATTERN'"
 # diagnostic row, not a transcript.
 CMD_LOGGED=$(printf '%s' "$CMD" | tr '\t\n' '  ' | cut -c1-200 | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g')
 PHASE_LOGGED=""
-if [ -f .claude/state/gate.json ]; then
+GATE_FILE="$STUDIO_STATE/gate.json"
+if [ -f "$GATE_FILE" ]; then
   if command -v jq >/dev/null 2>&1; then
-    PHASE_LOGGED=$(jq -r '.phase // ""' .claude/state/gate.json 2>/dev/null) || PHASE_LOGGED=""
+    PHASE_LOGGED=$(jq -r '.phase // ""' "$GATE_FILE" 2>/dev/null) || PHASE_LOGGED=""
   fi
-  [ -n "$PHASE_LOGGED" ] || PHASE_LOGGED=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' .claude/state/gate.json 2>/dev/null \
+  [ -n "$PHASE_LOGGED" ] || PHASE_LOGGED=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' "$GATE_FILE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//')
 fi
 [ -n "$PHASE_LOGGED" ] || PHASE_LOGGED="-"
+
+# The log lives in the HOME's state directory, which in the external layout is
+# not under the cwd this command runs in. Embedded as a literal, escaped
+# exactly like CMD_LOGGED above.
+STATE_LOGGED=$(printf '%s' "$STUDIO_STATE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g')
 
 LOGGER="__r=\$(mktemp 2>/dev/null) __f=\$(mktemp 2>/dev/null)"
 NEW="$LOGGER; $CMD 2>&1 | tee \"\$__r\" 2>/dev/null | $FILTER | awk 'NR<=150' | tee \"\$__f\" 2>/dev/null"
 # [0] and not [1]: `$LOGGER` ends in `;`, so the pipeline starts at $CMD. The
 # added `tee`s are all DOWNSTREAM of it and shift nothing.
 NEW="$NEW; __rc=\${PIPESTATUS[0]}"
-NEW="$NEW; { [ -n \"\$__r\" ] && [ -n \"\$__f\" ] && mkdir -p .claude/state && printf '%s\t%s\t%s\t%s\t%s\t%s\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"\$(wc -c < \"\$__r\" | tr -d ' ')\" \"\$(wc -c < \"\$__f\" | tr -d ' ')\" \"\$__rc\" \"$CMD_LOGGED\" \"$PHASE_LOGGED\" >> .claude/state/filter-log.tsv; } 2>/dev/null || true"
+NEW="$NEW; { [ -n \"\$__r\" ] && [ -n \"\$__f\" ] && mkdir -p \"$STATE_LOGGED\" && printf '%s\t%s\t%s\t%s\t%s\t%s\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"\$(wc -c < \"\$__r\" | tr -d ' ')\" \"\$(wc -c < \"\$__f\" | tr -d ' ')\" \"\$__rc\" \"$CMD_LOGGED\" \"$PHASE_LOGGED\" >> \"$STATE_LOGGED/filter-log.tsv\"; } 2>/dev/null || true"
 NEW="$NEW; rm -f \"\$__r\" \"\$__f\" 2>/dev/null || true"
 NEW="$NEW; [ \"\$__rc\" -ne 0 ] && echo \"[filter-output] command exited \$__rc — output above is matched lines only\"; exit \$__rc"
 

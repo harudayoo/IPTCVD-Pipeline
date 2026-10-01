@@ -17,7 +17,92 @@
 # meant to write actually failed. Declared once: filter-output.sh's rewrite
 # and gate.sh's `test --red-cmd` both match against this, so the definition of
 # "looks like a real failure" cannot drift between the two doors that check it.
+# shellcheck disable=SC2034  # read by the scripts that source this file
 STUDIO_ASSERTION_PATTERN='(FAIL|ERROR|Error|error:|✕|✗|✘|✖|^ *[0-9]+:[0-9]+ +(error|warning)|problems? \(|assert|Exception|vulnerabilit|advisor|Timed out|^ *Tests?: |^ *Duration: |\[OK\]|built in |No security vulnerability|[0-9]+ (passed|failed|vulnerabilities))'
+
+# ------------------------------------------------------------- where things are
+#
+# studio_locate <path-of-calling-script>
+#
+# Two directories that used to be one:
+#   STUDIO_HOME     the directory holding the .claude/ this script lives in --
+#                   where state, scripts, skills and the pipeline docs are
+#   STUDIO_PROJECT  the codebase the gate guards -- where git runs, tests run,
+#                   and every source-root path is relative to
+#
+# In the ordinary layout they are the same directory. In the EXTERNAL layout
+# (install.sh --home DIR, for a repository that may not hold Claude or
+# pipeline files) the home is elsewhere and .claude/project-dir names the
+# codebase on one line. Also sets STUDIO_STATE, STUDIO_GATE_SEAL,
+# STUDIO_EXTERNAL (0/1) and STUDIO_GATE_CMD, the command block messages tell
+# the model to run -- which must be the one that works in THIS layout, or the
+# model is told to run a script that is not there and the pipeline drifts.
+#
+# Builtins only: gate-check.sh calls this on every Edit/Write.
+studio_locate() {
+  local self="${1//\\//}" d
+  case "$self" in /*|[A-Za-z]:/*) ;; *) self="${PWD//\\//}/$self" ;; esac
+  d="${self%/*}"        # .../.claude/hooks  or  .../.claude/scripts
+  d="${d%/*}"           # .../.claude
+  STUDIO_HOME="${d%/*}"
+  case "$STUDIO_HOME" in "") STUDIO_HOME="/" ;; esac
+  STUDIO_PROJECT="$STUDIO_HOME"; STUDIO_EXTERNAL=0
+  if [ -f "$STUDIO_HOME/.claude/project-dir" ]; then
+    IFS= read -r STUDIO_PROJECT < "$STUDIO_HOME/.claude/project-dir" || true
+    STUDIO_PROJECT="${STUDIO_PROJECT%$'\r'}"
+    if [ -n "$STUDIO_PROJECT" ]; then STUDIO_EXTERNAL=1; else STUDIO_PROJECT="$STUDIO_HOME"; fi
+  fi
+  STUDIO_STATE="$STUDIO_HOME/.claude/state"
+  STUDIO_GATE_SEAL="$STUDIO_STATE/gate.seal"
+}
+
+# studio_gate_phase <gate.json> -- the phase on record, or "idle" when there
+# is no file or no phase in it. jq when it works, grep when it does not.
+studio_gate_phase() {
+  local g="$1" p=""
+  [ -f "$g" ] || { printf 'idle'; return; }
+  if command -v jq >/dev/null 2>&1; then
+    p=$(jq -r '.phase // ""' "$g" 2>/dev/null) || p=""
+  fi
+  case "$p" in ""|null) p=$(grep -o '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' "$g" 2>/dev/null \
+      | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//') || p="" ;;
+  esac
+  printf '%s' "${p:-idle}"
+}
+
+# studio_brief -- the pipeline's standing orders in a few lines, for the
+# SessionStart and UserPromptSubmit hooks to put in front of the model.
+#
+# Why this exists: CLAUDE.md is context, and context drifts. In the external
+# layout it is worse -- the pipeline's CLAUDE.md is loaded through --add-dir,
+# and nothing promises it is re-read after /compact the way a project-root
+# CLAUDE.md is. Reported from the field: the agent followed the pipeline,
+# drifted, was told where the files were, followed it again, drifted again.
+# A hook's stdout on these two events is added to context every time, so the
+# location and the phase stop depending on the model remembering them.
+studio_brief() {  # studio_brief <phase>
+  local phase="$1" state="blocked"
+  [ "$phase" = create ] && state="open"
+  printf 'IPTCVD pipeline: gate phase is %s, so source edits are %s. Change the phase only with: %s <phase> ...\n' \
+    "$phase" "$state" "$(studio_script_cmd gate.sh)"
+  if [ "${STUDIO_EXTERNAL:-0}" = 1 ]; then
+    printf 'The pipeline lives OUTSIDE this repository, at %s -- its CLAUDE.md, skills, agents, specs (docs/specs/) and state are there. This repository may not hold Claude or pipeline files: never create .claude/, CLAUDE.md or pipeline docs in it.\n' \
+      "$STUDIO_HOME"
+  fi
+}
+
+# studio_script_cmd <script.sh> -- how to run one of the pipeline's scripts,
+# spelled for THIS layout. Every message that tells the model to run a script
+# goes through this: a message naming `.claude/scripts/` in a repository that
+# has no .claude/ sends the model looking for a file that is not there, which
+# is exactly the drift the external layout was reported for.
+studio_script_cmd() {
+  if [ "${STUDIO_EXTERNAL:-0}" = 1 ]; then
+    printf 'bash "%s/.claude/scripts/%s"' "$STUDIO_HOME" "$1"
+  else
+    printf 'bash .claude/scripts/%s' "$1"
+  fi
+}
 
 studio_guard() {
   local self="$1"
@@ -195,7 +280,9 @@ studio_normalise_path() {
     case "${p,,}" in "$root_l"/*) p="${p:$(( ${#STUDIO_ROOT} + 1 ))}" ;; esac
   else
     pwd_w=$(pwd -W 2>/dev/null || true)
-    for root in "$PWD" "$pwd_w"; do
+    # The PROJECT first: in the external layout the hook's cwd is the
+    # codebase too, but a Bash `cd` must not change what a path is relative to.
+    for root in "${STUDIO_PROJECT:-}" "$PWD" "$pwd_w"; do
       [ -n "$root" ] || continue
       root_l=${root//\\//}; root_l=${root_l,,}
       case "${p,,}" in
@@ -262,7 +349,7 @@ studio_find_root() {
 # cksum, not git hash-object: gate.sh must seal in a directory that is not a
 # git repository, and a seal that silently failed to write would make the
 # audit revert gate.sh's own legitimate write.
-STUDIO_GATE_SEAL=".claude/state/gate.seal"
+STUDIO_GATE_SEAL="${STUDIO_GATE_SEAL:-.claude/state/gate.seal}"   # studio_locate sets the real one
 studio_gate_sum() { cksum < "$1" 2>/dev/null | cut -d' ' -f1-2; }
 
 # ------------------------------------------------------------- gate decisions
@@ -276,11 +363,13 @@ studio_log_gate() {  # studio_log_gate <hook> <verdict> <phase> <target> [reason
   # $STUDIO_ROOT, when set by a prior studio_normalise_path call, is the
   # worktree (or main checkout) the DECISION was actually made for -- the
   # log lives beside the gate.json that produced it, not always beside $PWD's.
-  local dir="${STUDIO_ROOT:-.}"
-  [ -d "$dir/.claude/state" ] || return 0
+  # $STUDIO_LOG_STATE, when a caller sets it, is the state directory of the
+  # gate that actually decided -- the home's, in the external layout.
+  local dir="${STUDIO_LOG_STATE:-${STUDIO_ROOT:-.}/.claude/state}"
+  [ -d "$dir" ] || return 0
   { printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "${5:-}" \
-      >> "$dir/.claude/state/gate-log.tsv"; } 2>/dev/null || true
+      >> "$dir/gate-log.tsv"; } 2>/dev/null || true
   return 0
 }
 

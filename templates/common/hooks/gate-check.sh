@@ -36,6 +36,7 @@ set -uo pipefail
 SELF="${BASH_SOURCE[0]}"
 # shellcheck source=/dev/null
 . "$(dirname "$SELF")/_guard.sh"
+studio_locate "$SELF"
 
 INPUT=$(cat)
 FILE="$(json_field "$INPUT" 'tool_input.file_path')"
@@ -62,7 +63,22 @@ SHARED_SURFACE="{{SHARED_SURFACE_REGEX}}"
 # checkout happens to be in. Falls back to the plain relative path (resolved
 # by the shell against $PWD, same as before this existed) when no gate.json
 # was found anywhere up the tree.
-GATE="${STUDIO_ROOT:+$STUDIO_ROOT/}.claude/state/gate.json"
+#
+# EXTERNAL layout: the codebase has no gate.json of its own, so the walk finds
+# nothing (or stops at a linked worktree's boundary) and the home's gate
+# governs -- one pipeline home per codebase, worktrees included. The walk DOES
+# find the home's own gate.json for a file inside the home, which strips that
+# file to `.claude/...`/`docs/...` relative to the home -- exactly the shape
+# the enforcement-file and allow rules below already judge.
+# STUDIO_LOG_STATE is read by studio_log_gate in _guard.sh.
+# shellcheck disable=SC2034
+if [ -n "$STUDIO_ROOT" ] && { [ "$STUDIO_EXTERNAL" = 0 ] || [ -f "$STUDIO_ROOT/.claude/state/gate.json" ]; }; then
+  GATE="$STUDIO_ROOT/.claude/state/gate.json"
+  STUDIO_LOG_STATE="$STUDIO_ROOT/.claude/state"
+else
+  GATE="$STUDIO_STATE/gate.json"
+  STUDIO_LOG_STATE="$STUDIO_STATE"
+fi
 
 # Dependency manifests are guarded too. Ecosystem-independent, and matched
 # EXACTLY at the repo root so a downloaded package's own manifest under a
@@ -122,12 +138,12 @@ esac
 # fire for these paths anyway, since this block will have already exited.
 if studio_guard "$SELF" >/dev/null 2>&1; then
   case "${FILE,,}" in
-    .claude/hooks/*|.claude/scripts/*|.claude/state/gate.json|.claude/state/gate.seal|.claude/state/.bash-audit-*|.claude/state/hooks.sha256|.claude/state/gate-log.tsv|.claude/settings.json|.claude/settings.local.json)
+    .claude/hooks/*|.claude/scripts/*|.claude/state/gate.json|.claude/state/gate.seal|.claude/state/.bash-audit-*|.claude/state/hooks.sha256|.claude/state/gate-log.tsv|.claude/settings.json|.claude/settings.local.json|.claude/project-dir|iptcvd-claude|iptcvd-claude.ps1|iptcvd-claude.cmd)
       echo "BLOCKED: $FILE is part of the enforcement layer and cannot be edited" >&2
       echo "  from inside a session, in any gate phase. This is not what the gate is" >&2
       echo "  for -- it is what checks the gate." >&2
       echo "  To change it on purpose: edit it outside this session (or with hooks" >&2
-      echo "  disabled), then run  bash .claude/scripts/hook-integrity.sh --update" >&2
+      echo "  disabled), then run  $(studio_script_cmd hook-integrity.sh) --update" >&2
       echo "  and commit the manifest change in the same commit as the edit." >&2
       studio_log_gate gate-check BLOCK - "$FILE" protected-enforcement-file
       exit 2
@@ -268,8 +284,8 @@ esac
 
 unblock_hint() {
   echo "Complete and approve the plan and test phases, then record the decision:" >&2
-  echo "  bash .claude/scripts/gate.sh create --problem \"<what breaks>\" --red \"<the failing test, or n/a: why>\"" >&2
-  echo "Reset at handoff:  bash .claude/scripts/gate.sh idle" >&2
+  echo "  $(studio_script_cmd gate.sh) create --problem \"<what breaks>\" --red \"<the failing test, or n/a: why>\"" >&2
+  echo "Reset at handoff:  $(studio_script_cmd gate.sh) idle" >&2
 }
 
 if [ ! -f "$GATE" ]; then
@@ -395,7 +411,7 @@ if [ "$MANIFEST" = "1" ]; then
   echo "A dependency is the most expensive kind of reuse: transitive packages, a" >&2
   echo "CVE surface, a licence, and an upgrade obligation. Check what is already" >&2
   echo "here, then record the verdict alongside the plan:" >&2
-  echo "  bash .claude/scripts/gate.sh create --problem \"…\" --red \"…\" \\" >&2
+  echo "  $(studio_script_cmd gate.sh) create --problem \"…\" --red \"…\" \\" >&2
   echo "    --deps \"<what you checked first, and why it does not cover this>\"" >&2
   echo "Lockfiles are NOT gated — a cold install is never blocked." >&2
   studio_log_gate gate-check BLOCK "$PHASE" "$FILE" missing-deps
@@ -415,7 +431,7 @@ if [ "$NEW_SURFACE" = "1" ] && [ -z "${REUSE:-}" ]; then
   echo "  file: $FILE" >&2
   echo "Ask what already exists before adding a fifth one, then record the" >&2
   echo "verdict alongside the plan you already have:" >&2
-  echo "  bash .claude/scripts/gate.sh create --problem \"…\" --red \"…\" \\" >&2
+  echo "  $(studio_script_cmd gate.sh) create --problem \"…\" --red \"…\" \\" >&2
   echo "    --reuse \"<reuse X / extend X / new because X cannot Y>\"" >&2
   studio_log_gate gate-check BLOCK "$PHASE" "$FILE" missing-reuse
   exit 2

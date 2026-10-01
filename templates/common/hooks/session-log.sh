@@ -32,15 +32,18 @@
 # feature that overran its window.
 set -uo pipefail
 
-STATE=".claude/state"
-LOG="$STATE/session-log.tsv"
-
 INPUT=$(cat 2>/dev/null || true)
 
-# No _guard.sh here, deliberately. This hook carries no configure-time
-# placeholder and has nothing to be misconfigured, and a recorder that refused
-# to record until the pipeline was configured would miss exactly the sessions
-# where somebody is still setting it up.
+# _guard.sh is SOURCED for studio_locate and studio_brief, but studio_guard is
+# never called, deliberately. This hook carries no configure-time placeholder,
+# and a recorder that refused to record until the pipeline was configured
+# would miss exactly the sessions where somebody is still setting it up.
+SELF="${BASH_SOURCE[0]}"
+# shellcheck source=/dev/null
+. "$(dirname "$SELF")/_guard.sh" 2>/dev/null || exit 0
+studio_locate "$SELF"
+STATE="$STUDIO_STATE"
+LOG="$STATE/session-log.tsv"
 field() {   # field <key> -- best-effort, never fatal
   local k="$1" v=""
   if command -v jq >/dev/null 2>&1; then
@@ -90,17 +93,31 @@ printf '%s\t%s\t%s\t%s\n' \
 # stdout is how it reaches the model: SessionStart is one of the few events
 # where Claude Code adds plain-text stdout to context as something Claude can
 # see and act on, rather than only logging it for a human to find later.
-if [ -f .claude/scripts/hook-integrity.sh ]; then
-  if ! INTEGRITY_OUT=$(bash .claude/scripts/hook-integrity.sh 2>&1); then
+INTEGRITY_SH="$STUDIO_HOME/.claude/scripts/hook-integrity.sh"
+if [ -f "$INTEGRITY_SH" ]; then
+  if ! INTEGRITY_OUT=$(bash "$INTEGRITY_SH" 2>&1); then
     echo "INTEGRITY FAIL: the enforcement layer differs from what was last reviewed."
     printf '%s\n' "$INTEGRITY_OUT" | sed 's/^/  /'
-    echo "If this change is intended: bash .claude/scripts/hook-integrity.sh --update"
+    echo "If this change is intended: $(studio_script_cmd hook-integrity.sh) --update"
     echo "If it is not: revert the file(s) named above before trusting any gate here."
     { printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)" \
         session-log "INTEGRITY FAIL" "$PHASE" .claude/scripts/hook-integrity.sh \
         "hooks-differ-from-manifest" >> "$STATE/gate-log.tsv"; } 2>/dev/null || true
   fi
+fi
+
+# --- the pipeline's standing orders, every session ---------------------------
+# See studio_brief in _guard.sh for why this is stdout and not only CLAUDE.md.
+# After a COMPACT in the external layout, the pipeline CLAUDE.md itself is
+# re-printed: it arrived through --add-dir, and nothing promises that is
+# re-read the way a project-root CLAUDE.md is. Claude Code moves anything past
+# 10,000 characters to a file and keeps a preview, so size is bounded anyway.
+studio_brief "${PHASE/#-/idle}"
+if [ "$STUDIO_EXTERNAL" = 1 ] && [ "$SOURCE" = compact ] && [ -f "$STUDIO_HOME/CLAUDE.md" ]; then
+  echo
+  echo "Pipeline instructions (re-read after compaction, from $STUDIO_HOME/CLAUDE.md):"
+  cat "$STUDIO_HOME/CLAUDE.md" 2>/dev/null || true
 fi
 
 exit 0

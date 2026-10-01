@@ -27,7 +27,11 @@
 # --update. The point is that disarming the pipeline stops being invisible.
 set -uo pipefail
 
-cd "$(dirname "$0")/../.." || exit 1
+# shellcheck source=/dev/null
+. "$(dirname "$0")/../hooks/_guard.sh" || { echo "$(basename "$0"): cannot find ../hooks/_guard.sh" >&2; exit 1; }
+studio_locate "$0"
+# The manifest covers the pipeline's own files, so it runs in the HOME.
+cd "$STUDIO_HOME" || exit 1
 
 MANIFEST=".claude/state/hooks.sha256"
 MODE="check"
@@ -50,7 +54,11 @@ hash_of() {
 # there is invisible to every hook test that only ever calls gate.sh with
 # valid-shaped answers.
 TRACKED=""
-for f in .claude/hooks/*.sh .claude/scripts/*.sh .claude/settings.json; do
+# The external layout's wiring is enforcement too: project-dir decides which
+# codebase the gate guards, and the launchers decide which settings load.
+# Absent in the ordinary layout, and skipped by the -f test below.
+for f in .claude/hooks/*.sh .claude/scripts/*.sh .claude/settings.json \
+         .claude/project-dir iptcvd-claude iptcvd-claude.ps1 iptcvd-claude.cmd; do
   [ -f "$f" ] || continue
   TRACKED="$TRACKED $f"
 done
@@ -74,7 +82,7 @@ fi
 if [ ! -f "$MANIFEST" ]; then
   echo "hook-integrity: no $MANIFEST." >&2
   echo "  Nothing can tell whether the hooks are the ones that were reviewed." >&2
-  echo "  Record them:  bash .claude/scripts/hook-integrity.sh --update" >&2
+  echo "  Record them:  $(studio_script_cmd hook-integrity.sh) --update" >&2
   exit 1
 fi
 
@@ -130,7 +138,7 @@ if [ "$RC" != 0 ]; then
   echo >&2
   echo "The enforcement layer differs from what was last reviewed." >&2
   echo "If the change is intended, re-record it and commit BOTH together:" >&2
-  echo "  bash .claude/scripts/hook-integrity.sh --update" >&2
+  echo "  $(studio_script_cmd hook-integrity.sh) --update" >&2
   exit 1
 fi
 

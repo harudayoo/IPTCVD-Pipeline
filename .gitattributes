@@ -45,3 +45,7 @@ templates/common/scripts/** text eol=lf
 # `[[:space:]]` and `$`, and a stray CR is whitespace that was not in the
 # original output. A fixture normalised by a checkout is no longer a capture.
 test/fixtures/** -text
+
+# Windows entry points and the generated launcher run under PowerShell / cmd.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf

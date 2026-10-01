@@ -14,7 +14,7 @@ the verification fan-out and the token budget that plan can actually afford:
 | **Max** | 11 | 9 | 6 | 3 parallel, read-only | + proposal & judge | monthly `/report` |
 | **Max 20x** | 24 | 14 | 7 | 5 parallel, read-only | + agent teams / workflows | `/studio-report` on OTel |
 
-All three share the same enforcement layer: seven hooks, path-scoped rules, a
+All three share the same enforcement layer: eight hooks, path-scoped rules, a
 committed gate file that carries the plan's *content*, and agent memory in
 version control. The tiers differ in how many specialists exist and how wide the
 verification fan-out is — never in how strict the gates are.
@@ -124,7 +124,67 @@ There is deliberately no `curl | bash` one-liner.
 | Recommended | `jq` — hooks use it when present and fall back to a shell parser when absent |
 | Optional | `python3` — the report scripts. Required in practice on Max 20x. |
 
-Works on Linux, macOS and WSL.
+Works on Linux, macOS, WSL and native Windows (see below).
+
+### Native Windows
+
+Use the PowerShell entry points. They take the same options as the `.sh`
+scripts and run them under **Git Bash**, the bash Claude Code itself uses for
+hooks on Windows. They never use `C:\Windows\System32\bash.exe`, which is WSL
+and would install hooks native Claude Code cannot run.
+
+```powershell
+C:\tools\iptcvd-pipeline\install.ps1 --plan pro --target .
+C:\tools\iptcvd-pipeline\configure.ps1 --target .
+C:\tools\iptcvd-pipeline\verify.ps1 --target .
+```
+
+Requires [Git for Windows](https://git-scm.com/download/win). If your bash is
+somewhere unusual, set `CLAUDE_CODE_GIT_BASH_PATH` to it; the installer and
+Claude Code both honour it. If the execution policy blocks the script, run
+`powershell -ExecutionPolicy Bypass -File .\install.ps1 ...`.
+
+### When the repository may not hold Claude or pipeline files
+
+Some repositories cannot carry `.claude/`, `CLAUDE.md` or pipeline docs. Use
+`--home` to put **all** of it in a directory outside the repository. Nothing is
+written to the repository, including `.gitignore`:
+
+```bash
+~/.iptcvd-pipeline/install.sh   --plan pro --target /path/to/repo --home ~/pipelines/repo
+~/.iptcvd-pipeline/configure.sh --home ~/pipelines/repo
+~/.iptcvd-pipeline/verify.sh    --home ~/pipelines/repo
+```
+
+Then **start Claude Code only through the launcher** the install writes into the
+home:
+
+```bash
+~/pipelines/repo/iptcvd-claude             # bash / macOS / Linux / Git Bash
+~\pipelines\repo\iptcvd-claude.ps1         # PowerShell   (or .cmd from cmd)
+```
+
+The launcher starts Claude in the repository with `--settings` (the hooks) and
+`--add-dir` (skills, agents, rules, CLAUDE.md) pointing at the home. Plain
+`claude` in the repository loads **none** of it: no hooks, no skills, no gate.
+
+Moving the files by hand is not the same thing, and the difference is what was
+reported. With the files somewhere Claude Code does not look, the agent follows
+the pipeline only while somebody keeps pointing at it, and drifts again after
+that. The external layout closes that gap in three places:
+
+- The skills, agents and rules are **rewritten at install** so every
+  `.claude/scripts/…` and `docs/specs/…` path they name is the home's. The model
+  never has to remember a translation.
+- Every block message names the command that works in this layout.
+- A hook puts the gate phase and the pipeline's location in front of the model
+  **on every prompt**, and re-prints the pipeline's `CLAUDE.md` after
+  `/compact`.
+
+Project documentation (`docs/architecture.md`, `docs/api/`) still lives in the
+repository, because that is where the code's docs belong. The pipeline's own
+artifacts (specs, handoff notes, reports, the profile, ADRs) live in the home.
+A home inside the repository, or around it, is refused.
 
 ---
 
@@ -316,7 +376,8 @@ placeholder nothing substitutes leaves a hook inert forever.
 ├── agents/          the tier's roster
 ├── skills/          the tier's playbooks
 ├── rules/           path-scoped standards, loaded only when a match is read
-├── hooks/           gate-check, bash-gate, filter-output, post-edit, doc-check
+├── hooks/           gate-check, bash-gate, bash-audit, filter-output, post-edit,
+│                    doc-check, session-log, prompt-context
 ├── scripts/         gate.sh, hook-integrity.sh, ratchet.sh, coverage-gate.sh
 ├── agent-memory/    committed — this is the institutional memory
 ├── workflows/       Max 20x only
@@ -387,7 +448,7 @@ scan work, **sonnet** for building, **opus** for irreversible decisions and
 adversarial reasoning. The installer prints which agents are on Opus, because
 that is where the cost is.
 
-### The seven hooks — identical on every tier
+### The eight hooks — identical on every tier
 
 | Hook | Event | Behaviour on misconfiguration |
 |---|---|---|
@@ -398,8 +459,12 @@ that is where the cost is.
 | `post-edit` | PostToolUse (Edit/Write) | Fails open |
 | `doc-check` | Stop | Fails open |
 | `session-log` | SessionStart | Fails open — a recorder that can block a session start is one you delete |
+| `prompt-context` | UserPromptSubmit | Fails open and silent — a reminder is not worth an error on every message |
 
-Six of those guard. `session-log` only counts, and it was the newest thing
+Six of those guard. The other two keep the gate phase (and, in the external
+layout, where the pipeline lives) in front of the model: `session-log` at
+every session start, `/clear` and `/compact`, `prompt-context` on every
+prompt. `session-log` also counts, and it was the newest thing
 here for one release because of an argument this repo lost with itself: the
 two largest token levers in the pipeline were asserted in prose and measured
 by nothing, which is the same defect as an 800-line rule that thirteen files
@@ -1140,7 +1205,17 @@ Two rules of thumb regardless of tier:
   `merge=union` `.gitattributes` entry that keeps two worktrees' logs from
   conflicting on merge is added by `install.sh` going forward; an existing
   install picks it up only after re-running `install.sh` or adding the line
-  by hand.
+  by hand. In the external layout there is one home per codebase, so every
+  worktree of it is governed by the home's single gate.
+- The external layout depends on being started through its launcher. Plain
+  `claude` in the repository loads no hooks and no pipeline instructions, and
+  nothing in the repository can warn about that, since the repository is not
+  allowed to hold anything.
+- `bash-gate` splits command words on whitespace. A quoted absolute path with
+  a space in it is recognised only when it lies under the project or, in the
+  external layout, the pipeline home: those two are aliased to a space-free
+  token before parsing. `bash-audit` still catches any other such path after
+  the fact.
 
 ## Further reading
 

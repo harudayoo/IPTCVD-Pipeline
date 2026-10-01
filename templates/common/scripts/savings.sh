@@ -30,7 +30,12 @@
 # when you quote it.
 set -uo pipefail
 
-STATE=".claude/state"
+# shellcheck source=/dev/null
+. "$(dirname "$0")/../hooks/_guard.sh" || { echo "$(basename "$0"): cannot find ../hooks/_guard.sh" >&2; exit 1; }
+studio_locate "$0"
+# Logs and the committed per-developer totals are pipeline files: HOME.
+cd "$STUDIO_HOME" || exit 1
+STATE="$STUDIO_STATE"
 # filter-log.tsv carries two more columns than this script reads (the command
 # and the gate phase, added so a filter-log row can be told apart from
 # another). Nothing below needs a change for that: every field this file
@@ -190,7 +195,7 @@ if [ "$nshared" -le 1 ]; then
   echo "SCOPE: this machine only — both raw logs are gitignored, so nothing above"
   echo "represents a teammate's sessions. Quote the byte columns, not the token"
   echo "estimate. Sharing a repository with someone? Run:"
-  echo "    bash .claude/scripts/savings.sh --record   # then commit $SHARED/"
+  echo "    $(studio_script_cmd savings.sh) --record   # then commit $SHARED/"
 else
   echo "SCOPE: the figures above are THIS machine. $nshared developers have"
   echo "recorded monthly totals in $SHARED/ — the project-wide"

@@ -57,9 +57,12 @@ HOOKDIR="$(cd "$(dirname "$SELF")" && pwd)"
 # shellcheck source=/dev/null
 . "$HOOKDIR/_guard.sh"
 
-# Hooks run with cwd at the repo root; gate-check.sh resolves .claude/state
-# relative to it, so anchor here rather than trusting the inherited cwd.
-cd "$HOOKDIR/../.." 2>/dev/null || exit 0
+# Relative write targets are resolved against the CODEBASE, so anchor there
+# rather than trusting the inherited cwd. That is the hooks' own checkout in
+# the ordinary layout, and the project named in .claude/project-dir in the
+# external one -- where the hooks live somewhere else entirely.
+studio_locate "$SELF"
+cd "$STUDIO_PROJECT" 2>/dev/null || exit 0
 
 INPUT=$(cat)
 
@@ -150,7 +153,7 @@ $SEGCWD/$t" ;;
 # checks below. Same dual-parser discipline as every other phase read in this
 # repo: jq if it works, a grep fallback if not, "idle" if neither finds one.
 gate_phase_now() {
-  local gate=".claude/state/gate.json" phase=""
+  local gate="$STUDIO_STATE/gate.json" phase=""
   [ -f "$gate" ] || { printf 'idle'; return; }
   if command -v jq >/dev/null 2>&1; then
     phase=$(jq -r '.phase // ""' "$gate" 2>/dev/null) || phase=""
@@ -457,7 +460,8 @@ process_segments() {
         done
         ;;
       tar)
-        case "${1:-}" in *x*|--extract*) block_bulk_rewrite "tar -x" ;; esac
+        # *x* covers -x, xf and --extract alike.
+        case "${1:-}" in *x*) block_bulk_rewrite "tar -x" ;; esac
         ;;
       unzip)
         block_bulk_rewrite "unzip"
@@ -565,6 +569,43 @@ process_segments() {
   done < <(printf '%s\n' "$CMD" | sed 's/>|/> /g; s/&&/\n/g; s/||/\n/g; s/[;|]/\n/g')
 }
 
+# --- absolute paths that contain a space ------------------------------------
+# Every extractor above splits words on whitespace, so a quoted absolute
+# target with a space in it -- `echo x > "C:/Users/Jo Doe/pipe/.claude/state/
+# gate.json"` -- reached delegation as `"C:/Users/Jo`, matched nothing, and
+# was allowed. Measured, in the external layout, where the pipeline home sits
+# under a Windows user profile and a space is ordinary.
+#
+# Rather than teach every extractor quoting, the two paths that matter are
+# ALIASED before parsing: every spelling of the project and of the home
+# (C:/x, C:\x and /c/x, case-insensitively) becomes a token with no space in
+# it, and the delegation loop below maps the token back. awk, via ENVIRON: an
+# `-v` value would have its backslashes eaten as escapes.
+studio_alias_cmd() {  # studio_alias_cmd <path> <token> -- rewrites $CMD
+  local p="${1//\\//}" msys="" win base
+  [ -n "$p" ] || return 0
+  # This hook runs on EVERY Bash call, and awk is a process spawn (~100ms on
+  # Windows). A command that never mentions the directory's own name cannot
+  # contain any spelling of its path -- a builtin substring test says so free.
+  base="${p%/}"; base="${base##*/}"
+  [ -n "$base" ] && case "${CMD,,}" in *"${base,,}"*) ;; *) return 0 ;; esac
+  case "$p" in [A-Za-z]:/*) msys="/${p:0:1}${p:2}"; msys="${msys,}" ;; esac
+  case "$p" in /[A-Za-z]/*) msys="$p"; p="${p:1:1}:${p:2}" ;; esac
+  win="${p//\//\\}"
+  CMD=$(A1="$p" A2="$win" A3="$msys" TOK="$2" awk '
+    BEGIN { n = 0; for (k = 1; k <= 3; k++) { s = ENVIRON["A" k]; if (s != "") sp[++n] = tolower(s) } tok = ENVIRON["TOK"] }
+    { line = $0; out = ""
+      while (1) {
+        best = 0; bl = 0; low = tolower(line)
+        for (k = 1; k <= n; k++) { i = index(low, sp[k]); if (i && (!best || i < best || (i == best && length(sp[k]) > bl))) { best = i; bl = length(sp[k]) } }
+        if (!best) break
+        out = out substr(line, 1, best - 1) tok; line = substr(line, best + bl)
+      }
+      print out line }' <<<"$CMD")
+}
+studio_alias_cmd "$STUDIO_PROJECT" "@IPTCVD_PROJECT@"
+[ "$STUDIO_EXTERNAL" = 1 ] && studio_alias_cmd "$STUDIO_HOME" "@IPTCVD_HOME@"
+
 process_segments "$CMD" 1
 
 # --- writes performed INSIDE an interpreter ---------------------------------
@@ -650,6 +691,8 @@ fi
 SEEN=""
 while IFS= read -r t; do
   [ -n "$t" ] || continue
+  # Undo the aliasing done before parsing (see studio_alias_cmd above).
+  t="${t//@IPTCVD_PROJECT@/$STUDIO_PROJECT}"; t="${t//@IPTCVD_HOME@/$STUDIO_HOME}"
   case "$SEEN" in *"|$t|"*) continue ;; esac
   SEEN="$SEEN|$t|"
   # A path containing a quote is pathological and would have to be
