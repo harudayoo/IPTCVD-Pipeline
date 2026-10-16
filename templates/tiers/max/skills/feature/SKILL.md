@@ -37,6 +37,7 @@ everything correctly — and the error appears one phase later than the mistake.
 ```bash
 bash .claude/scripts/gate.sh plan            # phases that keep source blocked
 bash .claude/scripts/gate.sh test
+bash .claude/scripts/gate.sh scope "<plan.md's Scope: line>"   # the file map, enforced
 
 bash .claude/scripts/gate.sh create \
   --problem "<what breaks, and what is out of scope>" \
@@ -84,6 +85,15 @@ delegation must include:
 
 The CONTEXT line is the money line. Every file path handed over is a search the
 subagent does not run.
+
+## Holding the build to the plan
+
+The plan's `Scope:` line is recorded with `gate.sh scope` before the test
+phase, and from then on the gate refuses any source edit outside it. During
+CREATE, brief **one execution slice at a time**, pasting the slice from
+`plan.md` verbatim. If an agent reports a file outside the plan's file map,
+amend the plan first, then re-record the scope — never widen the scope to let
+one edit through. Every scope change is logged and checked at VERIFY.
 
 ## Gate discipline
 

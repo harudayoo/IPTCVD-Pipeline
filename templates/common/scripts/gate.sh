@@ -20,7 +20,12 @@
 #     --problem "National finance summed every chapter's dues into the total" \
 #     [--red    "DuesTest::national_excludes_chapter fails: expected 0, got 41250"] \
 #     [--reuse  "extend DuesScope; it already models the two tiers"] \
-#     [--deps   "no date helper here; hand-rolled the same parser in 3 places"]
+#     [--deps   "no date helper here; hand-rolled the same parser in 3 places"] \
+#     [--scope  "src/services/dues.ts,src/http/DuesController.ts,src/dues/*"]
+#
+#   bash .claude/scripts/gate.sh scope "src/services/dues.ts,src/dues/*"
+#     # replace the file map on record, keeping every note; logged as a SCOPE
+#     # row with the old and new map, so a widened scope is visible at VERIFY
 #
 #   bash .claude/scripts/gate.sh advance verify   # next phase, SAME notes --
 #                                          # also re-runs red_cmd and re-hashes
@@ -39,6 +44,10 @@
 #
 # --reuse is required to CREATE a file under a shared-surface directory.
 # --deps is required to edit a dependency manifest.
+# --scope, once recorded, refuses source edits outside it. It is the plan's
+# file map as comma-separated globs (`*` crosses `/`). Test files and docs are
+# never scope-limited. Record it from the plan; amend it only when the PLAN
+# changes, never to let an edit through.
 #
 # --red, if omitted, is filled in from a `test --red-cmd` record when one is on
 # file and still describes a real failure. Without a live record, state it by
@@ -106,7 +115,7 @@ read_key() {
 
 # read_all_keys -- populates every field this file knows about, from $GATE.
 read_all_keys() {
-  PROBLEM=$(read_key problem); RED=$(read_key red); VAULT=$(read_key vault)
+  PROBLEM=$(read_key problem); RED=$(read_key red); SCOPE=$(read_key scope)
   REUSE=$(read_key reuse); DEPS=$(read_key deps)
   RED_CMD=$(read_key red_cmd); RED_RC=$(read_key red_rc); RED_AT=$(read_key red_at)
   RED_FILES=$(read_key red_files); RED_SHA=$(read_key red_sha)
@@ -121,7 +130,7 @@ write_gate() {
     printf '{"phase":"%s"' "$1"
     [ -n "${PROBLEM:-}" ]   && printf ',"problem":"%s"'   "$(esc "$PROBLEM")"
     [ -n "${RED:-}" ]       && printf ',"red":"%s"'       "$(esc "$RED")"
-    [ -n "${VAULT:-}" ]     && printf ',"vault":"%s"'     "$(esc "$VAULT")"
+    [ -n "${SCOPE:-}" ]     && printf ',"scope":"%s"'     "$(esc "$SCOPE")"
     [ -n "${REUSE:-}" ]     && printf ',"reuse":"%s"'     "$(esc "$REUSE")"
     [ -n "${DEPS:-}" ]      && printf ',"deps":"%s"'      "$(esc "$DEPS")"
     [ -n "${RED_CMD:-}" ]   && printf ',"red_cmd":"%s"'   "$(esc "$RED_CMD")"
@@ -223,7 +232,7 @@ EOF
       RSHA=$(printf '%s\n' "$RSHA" | sed '/^$/d')
 
       if [ -f "$GATE" ]; then read_all_keys; else
-        PROBLEM=""; RED=""; VAULT=""; REUSE=""; DEPS=""
+        PROBLEM=""; RED=""; SCOPE=""; REUSE=""; DEPS=""
       fi
       RED_CMD="$RED_CMD_ARG"; RED_RC="$RCRC"
       RED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -237,15 +246,61 @@ EOF
       printf '%s\n' "$RFILES" | sed 's/^/  /'
       studio_log_gate gate.sh RED test "$RED_CMD_ARG" "rc=$RCRC files=$NFILES"
     else
+      # The file map recorded at the end of PLAN survives into TEST; nothing
+      # else does, same as before.
+      KEEP_SCOPE=""
+      [ -f "$GATE" ] && KEEP_SCOPE=$(read_key scope)
       mkdir -p "$(dirname "$GATE")"
-      printf '{"phase":"test"}\n' > "$GATE"
+      if [ -n "$KEEP_SCOPE" ]; then
+        printf '{"phase":"test","scope":"%s"}\n' "$(esc "$KEEP_SCOPE")" > "$GATE"
+      else
+        printf '{"phase":"test"}\n' > "$GATE"
+      fi
       seal_gate
       echo "gate: test — source edits are blocked."
     fi
     ;;
 
   show)
-    if [ -f "$GATE" ]; then cat "$GATE"; else echo "no $GATE (treated as idle)"; fi
+    if [ -f "$GATE" ]; then
+      cat "$GATE"
+      # A gate open for source with no file map is legal -- a gate from before
+      # scope existed must keep working -- but it is the drift the map exists
+      # to stop, so say so where someone is already looking.
+      case "$(read_key phase)" in
+        create|verify)
+          [ -n "$(read_key scope)" ] || echo "note: no scope on record -- source edits are not limited to the plan's file map." ;;
+      esac
+    else
+      echo "no $GATE (treated as idle)"
+    fi
+    ;;
+
+  scope)
+    # Replace the file map on record WITHOUT touching the notes or the phase.
+    #
+    # Allowed in any phase, because the plan can legitimately change mid-slice
+    # and forcing a round trip through `plan` would only teach people to skip
+    # the scope entirely. The guard is visibility instead: every change is a
+    # SCOPE row in gate-log.tsv carrying the old and the new map, and the
+    # VERIFY reviewers read that log. A scope widened to let one edit through
+    # is a finding there, not a silent detour.
+    NEWSCOPE="${1:-}"
+    case "$NEWSCOPE" in
+      -h|--help) usage; exit 0 ;;
+      "") echo 'usage: gate.sh scope "<glob>,<glob>,..."   (the plan'"'"'s file map)' >&2; exit 1 ;;
+    esac
+    if [ ! -f "$GATE" ]; then
+      echo "refusing: no $GATE to record a scope on. Open the slice first." >&2
+      exit 1
+    fi
+    PHASE_NOW=$(read_key phase); [ -n "$PHASE_NOW" ] || PHASE_NOW=idle
+    read_all_keys
+    OLDSCOPE="$SCOPE"
+    SCOPE="$NEWSCOPE"
+    write_gate "$PHASE_NOW"
+    echo "gate: scope recorded ($PHASE_NOW): $SCOPE"
+    studio_log_gate gate.sh SCOPE "$PHASE_NOW" "$SCOPE" "was: ${OLDSCOPE:-none}"
     ;;
 
   advance)
@@ -348,7 +403,7 @@ EOF
     ;;
 
   create|verify)
-    PROBLEM=""; RED=""; VAULT=""; REUSE=""; DEPS=""
+    PROBLEM=""; RED=""; SCOPE=""; REUSE=""; DEPS=""
     RED_GIVEN=0
     # Carry forward any red_cmd record BEFORE parsing flags, so `--red`
     # omitted below can fall back to it, and so a record from an earlier
@@ -356,6 +411,9 @@ EOF
     if [ -f "$GATE" ]; then
       RED_CMD=$(read_key red_cmd); RED_RC=$(read_key red_rc)
       RED_AT=$(read_key red_at); RED_FILES=$(read_key red_files); RED_SHA=$(read_key red_sha)
+      # The file map is recorded at PLAN time, usually before the gate opens;
+      # re-opening without --scope must not quietly drop it.
+      SCOPE=$(read_key scope)
     else
       RED_CMD=""; RED_RC=""; RED_AT=""; RED_FILES=""; RED_SHA=""
     fi
@@ -363,7 +421,7 @@ EOF
       case "$1" in
         --problem) shift; PROBLEM="${1:-}" ;;
         --red)     shift; RED="${1:-}"; RED_GIVEN=1 ;;
-        --vault)   shift; VAULT="${1:-}" ;;
+        --scope)   shift; SCOPE="${1:-}" ;;
         --reuse)   shift; REUSE="${1:-}" ;;
         --deps)    shift; DEPS="${1:-}" ;;
         -h|--help) usage; exit 0 ;;

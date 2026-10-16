@@ -55,7 +55,8 @@ bash .claude/scripts/gate.sh idle
 The Stop hook nudges if you leave it open with no source in flight, and CI
 fails if it is ever COMMITTED open.
 
-Then clear `slug`, `spec_dir` and
-`owner_files`. The cycle is closed.
+`idle` also drops the recorded `scope`, so the next slice starts with no
+file map until its own plan records one. Then clear `slug` and `spec_dir`.
+The cycle is closed.
 
 Run `/handoff` before ending the session.

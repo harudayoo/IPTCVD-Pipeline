@@ -21,7 +21,11 @@ citation and a concrete fix. Cover, in this order:
    the boundary; parameterised queries only; no secret in the diff; no PII in
    logs; output encoded; new dependencies justified.
 3. **Contract drift** — does the implementation match the plan's file map and
-   interfaces? Anything extra is a finding.
+   interfaces? Anything extra is a finding. Check it mechanically: every
+   source file in `git diff HEAD --name-only` is covered by the `scope` in
+   `bash .claude/scripts/gate.sh show`, and every SCOPE row in
+   `bash .claude/scripts/gate.sh log 200` matches an amendment in `plan.md`.
+   A scope widened with no plan change behind it is a BLOCKER.
 4. **Quality** — error handling, duplication, naming, dead code.
 5. **Standards** — conformance to the relevant `.claude/rules/` file.
 

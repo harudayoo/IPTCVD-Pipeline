@@ -45,7 +45,9 @@ rubric and let the judge decide.
 
 This phase closes when:
 
-1. `plan.md` exists with a module map naming one owning agent per file.
+1. `plan.md` exists with a module map naming one owning agent per file, a
+   `Scope:` line covering exactly that map, and `Execution slices` concrete
+   enough to brief one at a time.
 2. `critique.md` exists and **every** BLOCKER and MAJOR is either resolved in
    the plan or explicitly accepted with a written reason.
 3. Every contract crossing a module boundary is stated precisely enough that
@@ -67,9 +69,16 @@ Hold both; they become `--reuse` and `--deps` when the gate is opened.
 
 ```bash
 bash .claude/scripts/gate.sh test
+bash .claude/scripts/gate.sh scope "<the plan's Scope: line, verbatim>"
 ```
 
-Then update `.claude/state/gate.json`: set `owner_files`
-from the module map, and append `plan` to `approved`.
+The scope is the module map made enforceable: from here on the gate refuses
+any source edit outside it, so the engineers in CREATE cannot drift past the
+plan no matter how long the session runs. `test` keeps it; `create` carries it.
+If CREATE later shows the plan missed a file, amend `plan.md` first, then
+re-run `gate.sh scope` with the amended line — the change is logged, and
+VERIFY checks every logged change against the plan.
+
+Then append `plan` to `approved` in `.claude/state/gate.json`.
 
 Tell me to run `/clear` before starting the test phase.

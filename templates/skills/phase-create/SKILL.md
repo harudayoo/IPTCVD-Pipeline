@@ -22,6 +22,16 @@ Read the module map in `docs/specs/<slug>/plan.md` and dispatch by file set:
 you scheduled deliberately. If the module map assigns a file to two agents, the
 plan is wrong; go back rather than improvising.
 
+Brief **one execution slice per dispatch**, pasting that slice from `plan.md`
+verbatim into the briefing. Handing a Sonnet engineer the whole plan and
+"implement it" is how a long build drifts from the design; a slice with exact
+files, contract, steps and a done-command is not open to interpretation.
+
+The gate enforces the plan's `Scope:` line (`gate.sh show` prints it). An
+engineer that reports a file "outside the plan's file map" has found a gap in
+the PLAN: amend `plan.md`, then `gate.sh scope "<amended line>"`, then
+re-dispatch. Never widen the scope just to let the edit through.
+
 Agents whose file sets do not overlap can run in parallel. Agents on either side
 of a contract cannot start together unless the contract in `api.md` is precise
 enough to build against without asking.
@@ -39,8 +49,9 @@ This phase closes when:
 
 1. The previously-red tests are green, captured in `evidence/tests-green.txt`.
 2. Lint and type checks pass.
-3. **The diff touches only files the plan named.** Anything else is scope that
-   grew silently — send it back or re-open the plan deliberately.
+3. **The diff touches only files the plan named.** The gate already refused
+   anything outside the recorded scope; check `git diff HEAD --name-only`
+   against it anyway, because a scope recorded too wide lets drift through.
 4. **You approve it.**
 
 Then advance. `advance` carries the slice's notes forward rather than

@@ -24,6 +24,15 @@ Write `docs/specs/<slug>/plan.md`:
 - **File map** — every file to create or modify.
 - **Data changes** — schema deltas and migration order.
 - **Risks and rollback** — what breaks if this is wrong.
+- **Scope** — one line, `Scope: <glob>,<glob>,...`, covering every source file
+  in the file map and nothing else. It is recorded with `gate.sh scope` once
+  the plan is approved, and the gate then refuses source edits outside it.
+- **Execution slices** — one block per slice, in build order: files (exact
+  paths, inside Scope), the test it turns green, the exact signatures and
+  names to use (copied, never paraphrased), 3-8 concrete steps naming the
+  existing code to call or extend, the one command that proves it done, and
+  what not to do. The implementer follows this without asking; a step it has
+  to interpret is a step it will interpret differently every time.
 
 If the plan needs more than ~12 files changed, split it into two features and
 say so. If the request is ambiguous, ask rather than assume.

@@ -28,6 +28,29 @@ Write `docs/specs/<slug>/plan.md`:
 - **Sequencing** — the order of work, and what is safe to parallelise.
 - **Risks and rollback** — what breaks if this is wrong, and how it is reversed.
 - **Out of scope** — explicit, so VERIFY does not grow the diff.
+- **Scope** — one line, `Scope: <glob>,<glob>,...`, covering every source
+  file in the module map and nothing else. It is recorded with
+  `gate.sh scope` once the plan is approved, and from then on the gate refuses
+  any source edit outside it. Prefer exact paths; use a `dir/*` glob only for
+  a directory this feature genuinely owns. Tests and docs never need listing.
+- **Execution slices** — the plan an implementer on a cheaper model follows
+  without coming back to ask. One block per slice, in build order:
+
+      ### Slice N — <imperative title>
+      Owner:     <agent>
+      Files:     <exact paths; each must be inside Scope>
+      Turns green: <the test(s) from acceptance.md this slice satisfies>
+      Contract:  <exact signatures, types, routes, column names — copied, not
+                  paraphrased; a name the implementer has to invent is a name
+                  that will drift>
+      Steps:     <3-8 numbered, concrete steps: what to add where, which
+                  existing function to call or extend (with its path)>
+      Done when: <the single test command that proves it>
+      Do not:    <the two or three tempting shortcuts that would be rejected>
+
+  A slice is the unit of a briefing: the conductor hands over one slice, not
+  the whole plan. If a slice cannot be written this concretely, the design is
+  not finished yet — that is a finding for this phase, not for CREATE.
 
 Write one ADR in `docs/adr/NNNN-<slug>.md` per decision that is expensive to
 reverse, using `docs/adr/TEMPLATE.md`. Most features need zero or one.
