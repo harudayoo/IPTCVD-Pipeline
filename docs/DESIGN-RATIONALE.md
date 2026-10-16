@@ -239,7 +239,7 @@ Twenty-four definitions, grouped by phase. Column notes: **M** = model tier, **M
 
 | Agent | M | Mem | W | Responsibility |
 |---|---|---|---|---|
-| `code-reviewer` | sonnet | project | no | Correctness, readability, duplication, error handling, contract drift |
+| `code-reviewer` | opus | project | no | Correctness, readability, duplication, error handling, contract drift; checks the Sonnet build and every logged scope change against the Opus plan |
 | `security-auditor` | opus | project | no | OWASP mapping, dependency and secret scanning, authz regression |
 | `qa-runner` | sonnet | local | no | Executes suites, drives the browser, captures evidence |
 | `perf-a11y-auditor` | sonnet | project | no | Core Web Vitals, axe violations, keyboard traversal, breakpoint matrix |
@@ -799,6 +799,16 @@ The rules that make this work:
 2. **`00-Pipeline/` is native vault content** — this is the part that genuinely benefits from being a vault rather than a repo, because it is cross-project, associative, and edited by you rather than by agents.
 3. **Agents write to `docs/`, never to the vault.** One direction only. The moment agents write into `00-Pipeline/`, your thinking and their generated output become indistinguishable and the vault stops being trustworthy.
 4. **Do not run Claude Code with the vault as the working directory.** That pattern is for people whose *project is the vault*. Yours is a codebase.
+
+**What agents orient from is not the vault.** The tempting version of this is
+"agents read the synced vault instead of re-reading the codebase." The vault
+is cheaper to read, but it cannot say when it stopped being true, and a stale
+map that is trusted is worse than none. Agents orient from
+`.claude/skills/codebase-map/layout.md` instead: generated from `git ls-files`
+by `layout-map.sh`, stamped with the commit it describes, with a `--check` that
+fails when the structure moves. A code graph (graphify) is the optional second
+layer for relationships. The vault stays what it is good at: your own
+cross-project reading.
 
 ## 7.2 Do you need an Obsidian MCP server?
 

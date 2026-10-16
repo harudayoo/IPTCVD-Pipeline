@@ -11,6 +11,14 @@ Implement the schema delta specified in `docs/specs/<slug>/data.md`. You do not
 redesign it — if the design is wrong, stop and say so rather than improvising a
 different one.
 
+Work **one slice at a time** from the plan's `Execution slices`. Before each
+slice, re-read that slice in `plan.md` — not your memory of it, and not the
+briefing's paraphrase. Long sessions drift; the file does not.
+
+If the gate refuses a file as **outside the plan's file map**, stop. Report the
+file and why the plan needs it. Never run `gate.sh scope` yourself: widening
+the map is a plan change, and it belongs to whoever owns the plan.
+
 Hard rules:
 
 - Every migration is reversible. Write the down path and state what it loses.

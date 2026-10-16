@@ -85,7 +85,12 @@ PROTECTED="{{SOURCE_ROOTS_REGEX}}"
 ROOT_ALT="${PROTECTED#^}"; ROOT_ALT="${ROOT_ALT%'(/|$)'}"
 ROOT_ALT="${ROOT_ALT#\(}"; ROOT_ALT="${ROOT_ALT%\)}"
 [ -n "$ROOT_ALT" ] || exit 0
+# A `*` segment compiled to `[^/]+` is `*` to git's pathspec matcher, and an
+# ERE escape (`Web\.Api`) is a literal character there too.
+ROOT_ALT="${ROOT_ALT//'[^/]+'/*}"
+set -f
 OLDIFS="$IFS"; IFS='|'; set -- $ROOT_ALT; IFS="$OLDIFS"
+set +f
 ROOTS="$*"
 MANIFESTS="package.json composer.json Cargo.toml go.mod pyproject.toml requirements.txt Gemfile build.gradle build.gradle.kts pom.xml"
 

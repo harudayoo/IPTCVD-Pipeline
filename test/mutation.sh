@@ -114,6 +114,33 @@ mutate gate-keystroke-answer test/hooks.sh \
   if [ ${#dense} -lt 0 ]; then' \
   'a single keystroke passes as the IDEA phase'
 
+# Not shipped as a regression -- shipped as a SENTENCE. "No change outside the
+# plan's file map" lived only in the implementer prompts, and the cheaper model
+# executing an Opus plan drifted past it. Each half of the scope gate, removed:
+# the enforcement itself, and the carry-forward that keeps a map recorded at
+# PLAN time alive once the gate opens.
+mutate gate-scope-unenforced test/hooks.sh \
+  templates/common/hooks/gate-check.sh \
+  '  if [ "$IN_SCOPE" = 0 ]; then' \
+  '  if false; then' \
+  'a file outside the plan'"'"'s file map is written anyway'
+
+mutate gate-scope-dropped-on-open test/hooks.sh \
+  templates/common/scripts/gate.sh \
+  '      SCOPE=$(read_key scope)
+    else' \
+  '      SCOPE=""
+    else' \
+  'opening the gate silently drops the file map recorded at plan time'
+
+# Glob roots: the absolute-path fallback turns each compiled `[^/]+` back into
+# a case `*`. Without that, a monorepo root matched no absolute spelling at all.
+mutate gate-glob-root-absolute test/hooks.sh \
+  templates/common/hooks/gate-check.sh \
+  "      r=\"\${r//'[^/]+'/*}\"" \
+  '      :' \
+  'an absolute path under a packages/*/src root walks through the gate'
+
 section "2. The second door"
 
 # Shipped: gate-check registered on Edit|Write only, so `sed -i`, `cat >`, `cp`

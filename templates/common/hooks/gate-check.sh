@@ -7,7 +7,7 @@
 # everything outside them, and for docs/tests/.claude/*.md regardless of phase,
 # so writing the plan itself is never blocked by the gate meant to require it.
 #
-# FIVE gates, in the order they fire:
+# SIX gates, in the order they fire:
 #
 #   0. FROZEN      -- a test file named in a recorded `red_files` list cannot
 #                     be edited during 'create'. Checked ahead of the
@@ -27,6 +27,12 @@
 #                     kind of reuse -- transitive packages, a CVE surface, a
 #                     licence, an upgrade obligation -- so it must be a stated
 #                     decision, not a reflex.
+#   5. SCOPE       -- when the plan recorded a `scope` (the file map, as a
+#                     comma-separated glob list), a guarded source file outside
+#                     it is refused. "No change outside the plan's file map"
+#                     was a sentence in every implementer's prompt and nothing
+#                     else; the cheaper model executing a plan drifts past a
+#                     sentence long before it drifts past a hook.
 #
 # The hook cannot judge whether a change is testable, so it does not try: it
 # requires the answer to be STATED. "n/a: <reason>" is a legitimate `red` for a
@@ -52,7 +58,12 @@ if ! studio_normalise_path FILE; then
 fi
 
 PROTECTED="{{SOURCE_ROOTS_REGEX}}"
-TEST_ROOT="{{TEST_ROOT}}"
+# Test roots, compiled by configure.sh to ONE anchored ERE (tests, plus
+# packages/<one dir>/tests, say). A LIST, because a monorepo has one per
+# package; matched with bash's own =~, so no extra process on the Edit/Write
+# latency path. Never write an example of the compiled form in a comment
+# here: verify.sh reads the first such pattern in this file as the root list.
+TEST_ROOTS_RE="{{TEST_ROOTS_REGEX}}"
 SHARED_SURFACE="{{SHARED_SURFACE_REGEX}}"
 
 # $STUDIO_ROOT is set by studio_normalise_path above (via studio_find_root):
@@ -219,8 +230,9 @@ fi
 case "$FILE" in
   docs/*|.claude/*|*.md) exit 0 ;;
 esac
-if [ -n "$TEST_ROOT" ]; then
-  case "$FILE" in "$TEST_ROOT"/*) exit 0 ;; esac
+# Case-SENSITIVE, unlike the guard below: this is an allow rule.
+if [ -n "$TEST_ROOTS_RE" ] && [[ "$FILE" =~ $TEST_ROOTS_RE ]]; then
+  exit 0
 fi
 
 # A TEST FILE, identified by the shape of its FILENAME rather than by where it
@@ -267,10 +279,18 @@ case "$FILE" in
     ROOTS="${ROOTS#\(}"; ROOTS="${ROOTS%\)}"
     FILE_LC=${FILE,,}
     OLDIFS="$IFS"; IFS='|'
+    set -f
     for r in $ROOTS; do
       [ -n "$r" ] || continue
-      case "$FILE_LC" in */"${r,,}"/*) GUARDED=1 ;; esac
+      # A `*` segment compiles to `[^/]+`; as a case pattern it is `*`, which
+      # also crosses `/` -- wider, so the fail-closed direction. UNQUOTED so
+      # that `*` matches; the ERE escapes configure.sh wrote (`Web\.Api`) read
+      # as literal characters in a case pattern too.
+      r="${r//'[^/]+'/*}"
+      # shellcheck disable=SC2254
+      case "$FILE_LC" in */${r,,}/*) GUARDED=1 ;; esac
     done
+    set +f
     IFS="$OLDIFS"
     ;;
 esac
@@ -303,7 +323,7 @@ gate_read_all() {
   # gets switched off, which fails open in the end anyway.
   local out
   if command -v jq >/dev/null 2>&1; then
-    out=$(jq -r '[.phase//"",.problem//"",.red//"",.vault//"",.reuse//"",.deps//""]|.[]' "$GATE" 2>/dev/null) \
+    out=$(jq -r '[.phase//"",.problem//"",.red//"",.scope//"",.reuse//"",.deps//""]|.[]' "$GATE" 2>/dev/null) \
       && [ -n "${out//[$'\n'[:space:]]/}" ] && { printf '%s\n' "$out"; return; }
   fi
   local py
@@ -313,7 +333,7 @@ sys.stdout.reconfigure(newline="")
 try: d = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception: d = {}
 if not isinstance(d, dict): d = {}
-for k in ("phase","problem","red","vault","reuse","deps"):
+for k in ("phase","problem","red","scope","reuse","deps"):
     v = d.get(k) or ""
     sys.stdout.write(str(v).replace(chr(10), chr(32)) + chr(10))' "$GATE" 2>/dev/null) \
       && [ -n "${out//[$'\n'[:space:]]/}" ] && { printf '%s\n' "$out"; return; }
@@ -322,8 +342,8 @@ for k in ("phase","problem","red","vault","reuse","deps"):
   #
   # The caller reads these six values with six sequential `read` calls, so a key
   # that prints nothing does not read as empty: it SHIFTS every value after it
-  # up by one. A gate carrying problem/red/reuse but no `vault` therefore handed
-  # `reuse` back as the vault answer and `deps` back as the reuse answer, and a
+  # up by one. A gate carrying problem/red/reuse but no `scope` therefore handed
+  # `reuse` back as the scope answer and `deps` back as the reuse answer, and a
   # correctly-recorded plan was refused for a note that was plainly there.
   #
   # That fails closed, so it never shipped a bad change -- it just made a valid
@@ -331,7 +351,7 @@ for k in ("phase","problem","red","vault","reuse","deps"):
   # switched off. It only appeared when both richer parsers were unavailable,
   # which is the branch least often exercised and most often shipped.
   local k v
-  for k in phase problem red vault reuse deps; do
+  for k in phase problem red scope reuse deps; do
     v=$(grep -o "\"$k\"[[:space:]]*:[[:space:]]*\"\(\\\\.\|[^\"\\\\]\)*\"" "$GATE" 2>/dev/null \
         | head -1 | sed "s/^\"$k\"[[:space:]]*:[[:space:]]*\"//; s/\"$//; s/\\\\\"/\"/g" || true)
     printf '%s\n' "$v"
@@ -339,12 +359,12 @@ for k in ("phase","problem","red","vault","reuse","deps"):
 }
 
 { IFS= read -r PHASE; IFS= read -r PROBLEM; IFS= read -r RED
-  IFS= read -r VAULT; IFS= read -r REUSE; IFS= read -r DEPS; } <<EOF
+  IFS= read -r SCOPE; IFS= read -r REUSE; IFS= read -r DEPS; } <<EOF
 $(gate_read_all)
 EOF
 # Any parser may hand back a trailing CR on Windows; one strip covers all three.
 PHASE=${PHASE%$'\r'}; PROBLEM=${PROBLEM%$'\r'}; RED=${RED%$'\r'}
-VAULT=${VAULT%$'\r'}; REUSE=${REUSE%$'\r'}; DEPS=${DEPS%$'\r'}
+SCOPE=${SCOPE%$'\r'}; REUSE=${REUSE%$'\r'}; DEPS=${DEPS%$'\r'}
 [ -z "${PHASE:-}" ] && PHASE="idle"
 
 # --- gate 1: phase ----------------------------------------------------------
@@ -435,6 +455,49 @@ if [ "$NEW_SURFACE" = "1" ] && [ -z "${REUSE:-}" ]; then
   echo "    --reuse \"<reuse X / extend X / new because X cannot Y>\"" >&2
   studio_log_gate gate-check BLOCK "$PHASE" "$FILE" missing-reuse
   exit 2
+fi
+
+# --- gate 5: the plan's file map ---------------------------------------------
+# Checked after the manifest gate on purpose: a manifest is governed by `deps`,
+# which is its own stated decision, and is never part of a file map anyway.
+#
+# Each entry is a bash glob matched against the SAME normalised path every
+# other rule here judges, so `src/services/*` covers everything beneath it
+# (`*` crosses `/` in a case pattern). Matched case-SENSITIVELY, like every
+# allow rule in this file: a scope is an allowlist, and widening an allowlist
+# is how a bypass gets built. An absolute path that root stripping could not
+# reduce is tried as `*/<entry>` so a real in-scope file is not refused for
+# its spelling; anything else outside the list fails closed.
+#
+# An ABSENT scope is not enforced -- a gate opened before this existed, or a
+# Pro slice whose plan is one file, must keep working. The phase skills record
+# it from the plan's file map; `gate.sh show` makes a missing one visible.
+if [ -n "${SCOPE:-}" ]; then
+  IN_SCOPE=0
+  OLDIFS="$IFS"; IFS=','
+  set -f   # the entries are patterns to MATCH, never globs to expand here
+  for pat in $SCOPE; do
+    pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
+    pat="${pat#./}"
+    [ -n "$pat" ] || continue
+    # shellcheck disable=SC2254
+    case "$FILE" in $pat) IN_SCOPE=1; break ;; esac
+    case "$FILE" in /*|[A-Za-z]:/*)
+      # shellcheck disable=SC2254
+      case "$FILE" in */$pat) IN_SCOPE=1; break ;; esac ;;
+    esac
+  done
+  set +f
+  IFS="$OLDIFS"
+  if [ "$IN_SCOPE" = 0 ]; then
+    echo "BLOCKED: $FILE is outside the plan's file map." >&2
+    echo "  scope on record: $SCOPE" >&2
+    echo "If the plan missed a file, that is a finding, not a detour: stop and report" >&2
+    echo "it to whoever owns the plan. Once the plan is amended, record the new map:" >&2
+    echo "  $(studio_script_cmd gate.sh) scope \"<the plan's file map, comma-separated>\"" >&2
+    studio_log_gate gate-check BLOCK "$PHASE" "$FILE" out-of-scope
+    exit 2
+  fi
 fi
 
 studio_log_gate gate-check ALLOW "$PHASE" "$FILE" ""

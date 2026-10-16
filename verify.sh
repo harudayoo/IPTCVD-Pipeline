@@ -83,7 +83,10 @@ head_ "1. Gate blocks source edits outside the create phase"
 printf '{"phase":"idle","feature":null,"slug":null,"approved":[]}\n' > "$GATE"
 ALL_ROOTS="$(grep -oE '\^\(([^)]*)\)' .claude/hooks/gate-check.sh | head -1 \
             | sed 's/^\^(//; s/)$//')"
-SRC_FILE="$(printf '%s' "$ALL_ROOTS" | cut -d'|' -f1)/probe.ts"
+# A probe path for one compiled root: a `*` segment (`[^/]+`) becomes a real
+# directory name, and ERE escapes are dropped back to the literal character.
+probe_dir() { local r="${1//'[^/]+'/probe}"; printf '%s' "${r//\\/}"; }
+SRC_FILE="$(probe_dir "$(printf '%s' "$ALL_ROOTS" | cut -d'|' -f1)")/probe.ts"
 [ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"$SRC_FILE\"}}")" = 2 ] \
   && pass "blocks $SRC_FILE" || fail "blocks $SRC_FILE"
 
@@ -97,7 +100,7 @@ OLDIFS="$IFS"; IFS='|'
 for _root in $ALL_ROOTS; do
   IFS="$OLDIFS"
   [ -n "$_root" ] || continue
-  PROBE_FILE="$_root/__probe__.x"
+  PROBE_FILE="$(probe_dir "$_root")/__probe__.x"
   if [ "$(rc_of gate-check.sh "{\"tool_input\":{\"file_path\":\"$PROBE_FILE\"}}")" = 2 ]; then
     pass "root '$_root' guards $PROBE_FILE"
   else

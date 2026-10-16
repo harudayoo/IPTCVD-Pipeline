@@ -32,15 +32,34 @@ under `docs/specs/`.
 
    ```bash
    bash .claude/scripts/gate.sh plan | test      # source stays blocked
+   bash .claude/scripts/gate.sh scope "<plan.md's Scope: line>"   # after plan approval
    bash .claude/scripts/gate.sh create --problem "..." --red "..."
    bash .claude/scripts/gate.sh advance verify   # carries the notes forward
    bash .claude/scripts/gate.sh idle             # at handoff, always
    ```
 
    Opening the gate belongs to the TEST phase, because that phase produces the
-   failing test `--red` names. You may record `slug`, `spec_dir`, `approved`
-   and `owner_files` in `gate.json` directly; the `phase` field and the notes
-   belong to `gate.sh`.
+   failing test `--red` names. You may record `slug`, `spec_dir` and
+   `approved` in `gate.json` directly; the `phase` field, the notes and the
+   `scope` belong to `gate.sh`.
+
+## Holding Sonnet to an Opus plan
+
+You plan and judge on Opus; the engineers build on Sonnet. What keeps the
+two aligned over a long build is not a better prompt, it is three mechanics:
+
+- **The scope is recorded.** After the plan is approved, run `gate.sh scope`
+  with the plan's `Scope:` line. The gate refuses source edits outside it.
+- **One slice per briefing.** In CREATE, dispatch one execution slice at a
+  time, with the slice pasted verbatim from `plan.md` into `SPEC`/`CONTRACT`.
+  After each slice, check its done-command output and its diff
+  (`git diff --stat`) before dispatching the next. A slice that touched files
+  its block did not list is rejected, not merged forward.
+- **Gaps go back to the plan.** An engineer reporting a file outside the map
+  has found a plan defect. Amend `plan.md`, re-record the scope, re-dispatch.
+  Never widen the scope just to let an edit through: `code-reviewer` checks
+  every logged scope change against the plan, and an unexplained one is a
+  BLOCKER.
 
 ## Phase map
 
@@ -50,7 +69,7 @@ under `docs/specs/`.
 | plan | `system-architect`, drawing on `data-architect`, `api-designer`, `ui-designer`, `security-architect`, `devops-planner` as the surface demands; then `red-team-critic` | `plan.md` + `critique.md`, every finding resolved or explicitly accepted |
 | test | `test-designer`, with `a11y-perf-budgeter` on UI work | `acceptance.md` + `evidence/tests-red.txt` showing the new tests failing for the right reason |
 | create | `backend-engineer`, `frontend-engineer`, `db-engineer`, `infra-engineer` — one owner per file set, never two agents in one file | `evidence/tests-green.txt` |
-| verify | `code-reviewer`, `security-auditor`, `qa-runner`, `perf-a11y-auditor`, `seo-auditor` — dispatched in parallel, all read-only | `verification.md`, zero BLOCKERs |
+| verify | `code-reviewer` (Opus: plan conformance), `security-auditor`, `qa-runner`, `perf-a11y-auditor`, `seo-auditor` — dispatched in parallel, all read-only | `verification.md`, zero BLOCKERs, every acceptance criterion traced to a passing test |
 | document | `doc-writer`, then `memory-curator` | updated `docs/` + `docs/handoff/<date>-<slug>.md` |
 
 ## Briefing template

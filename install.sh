@@ -283,6 +283,116 @@ for s in $TIER_SKILLS; do resolve skills "$s" >/dev/null || die "manifest lists 
 for r in $TIER_RULES;  do resolve rules  "$r" >/dev/null || die "manifest lists rule '$r' but no template exists"; done
 
 # --------------------------------------------------------------- detection
+# any_dir <path-with-optional-*-segments> -- true if it names a directory.
+any_dir() {
+  ( set +f; shopt -s nullglob; set -- "$TARGET"/$1
+    for _d in "$@"; do [ -d "$_d" ] && exit 0; done; exit 1 )
+}
+
+# Layouts the per-stack guesses above cannot see. Every value here is still a
+# GUESS written into the profile for confirmation; nothing is trusted unread.
+#
+#   monorepo     apps/, packages/, libs/, services/, modules/, crates/ under a
+#                workspace marker -> `packages/*/src` (or `packages/*` when
+#                the packages keep code at their own root), one entry per
+#                container, so a package added next month is already guarded.
+#   src/main     Maven/Gradle and some Scala/Kotlin trees keep tests at
+#                src/test BESIDE src/main. Guarding `src` would put the test
+#                root inside the source root, which configure.sh has to drop.
+#   root-level   Next.js/Nuxt/Remix-style apps with app/, pages/, components/,
+#                lib/ at the repo root and no src/.
+#   Rails, Django, Flutter: their own conventional roots.
+#
+# Only fills a field that is still NEEDS_REVIEW or was guessed as a bare
+# default the layout contradicts -- a stack-specific answer above wins.
+detect_layout() {
+  local c roots="" tests="" e ws=0
+
+  # --- workspace monorepo -------------------------------------------------
+  [ -f "$TARGET/pnpm-workspace.yaml" ] || [ -f "$TARGET/lerna.json" ] \
+    || [ -f "$TARGET/nx.json" ] || [ -f "$TARGET/turbo.json" ] \
+    || [ -f "$TARGET/go.work" ] || [ -f "$TARGET/rush.json" ] && ws=1
+  [ -f "$TARGET/package.json" ] && grep -q '"workspaces"' "$TARGET/package.json" 2>/dev/null && ws=1
+  [ -f "$TARGET/Cargo.toml" ] && grep -q '^\[workspace\]' "$TARGET/Cargo.toml" 2>/dev/null && ws=1
+  if [ "$ws" = 1 ]; then
+    for c in apps packages libs services modules crates; do
+      any_dir "$c/*" || continue
+      if any_dir "$c/*/src"; then e="$c/*/src"; else e="$c/*"; fi
+      roots="${roots:+$roots,}$e"
+      if any_dir "$c/*/tests"; then tests="${tests:+$tests,}$c/*/tests"
+      elif any_dir "$c/*/test"; then tests="${tests:+$tests,}$c/*/test"; fi
+    done
+    if [ -n "$roots" ]; then
+      # A root-level src/ in a monorepo is usually shared tooling or a legacy
+      # app; keep it guarded rather than silently dropping it.
+      [ -d "$TARGET/src" ] && roots="src,$roots"
+      SOURCE_ROOTS="$roots"
+      if [ -n "$tests" ]; then
+        [ -d "$TARGET/tests" ] && tests="tests,$tests"
+        TEST_ROOT="$tests"
+      fi
+      STACK="$STACK (monorepo)"
+      return 0
+    fi
+  fi
+
+  # --- src/main beside src/test (Maven, Gradle, sbt) ----------------------
+  if [ -d "$TARGET/src/main" ]; then
+    SOURCE_ROOTS="src/main"
+    [ -d "$TARGET/src/test" ] && TEST_ROOT="src/test"
+    if [ -f "$TARGET/pom.xml" ]; then
+      [ "$STACK" = "unknown" ] && STACK="Java (Maven)"
+      [ "$TEST_CMD" = "NEEDS_REVIEW" ] && { TEST_CMD="mvn -q test"; SINGLE_TEST_CMD="mvn -q test -Dtest="; }
+      [ "$BUILD_CMD" = "NEEDS_REVIEW" ] && BUILD_CMD="mvn -q package -DskipTests"
+    elif [ -f "$TARGET/build.gradle" ] || [ -f "$TARGET/build.gradle.kts" ]; then
+      [ "$STACK" = "unknown" ] && STACK="JVM (Gradle)"
+      [ "$TEST_CMD" = "NEEDS_REVIEW" ] && { TEST_CMD="./gradlew test"; SINGLE_TEST_CMD="./gradlew test --tests"; }
+      [ "$BUILD_CMD" = "NEEDS_REVIEW" ] && BUILD_CMD="./gradlew build -x test"
+    fi
+    return 0
+  fi
+
+  # --- Rails --------------------------------------------------------------
+  if [ -f "$TARGET/Gemfile" ] && [ -f "$TARGET/config/application.rb" ]; then
+    [ "$STACK" = "unknown" ] && STACK="Ruby on Rails"
+    roots="app"; [ -d "$TARGET/lib" ] && roots="app,lib"
+    SOURCE_ROOTS="$roots"
+    if [ -d "$TARGET/spec" ]; then TEST_ROOT="spec"; TEST_CMD="bundle exec rspec"
+      EXTRA_TEST_PATTERNS_RAW="*_spec.rb"
+    elif [ -d "$TARGET/test" ]; then TEST_ROOT="test"; TEST_CMD="bin/rails test"; fi
+    return 0
+  fi
+
+  # --- Django: every app is a top-level package holding an apps.py --------
+  if [ -f "$TARGET/manage.py" ]; then
+    roots=$(cd "$TARGET" && find . -maxdepth 3 -name apps.py -not -path './.*' 2>/dev/null \
+            | sed 's|^\./||; s|/apps\.py$||' | cut -d/ -f1 | sort -u | paste -sd, -) || roots=""
+    [ -n "$roots" ] && SOURCE_ROOTS="$roots"
+    [ "$STACK" = "Python" ] && STACK="Python (Django)"
+    [ "$TEST_CMD" = "pytest" ] || TEST_CMD="python manage.py test"
+    return 0
+  fi
+
+  # --- Flutter / Dart -----------------------------------------------------
+  if [ -f "$TARGET/pubspec.yaml" ] && [ -d "$TARGET/lib" ]; then
+    [ "$STACK" = "unknown" ] && STACK="Dart/Flutter"
+    SOURCE_ROOTS="lib"; [ -d "$TARGET/test" ] && TEST_ROOT="test"
+    [ "$TEST_CMD" = "NEEDS_REVIEW" ] && TEST_CMD="flutter test"
+    return 0
+  fi
+
+  # --- root-level app directories, no src/ (Next.js, Nuxt, Remix, ...) -----
+  if [ -f "$TARGET/package.json" ] && [ ! -d "$TARGET/src" ]; then
+    roots=""
+    for c in app pages components lib hooks utils server features modules; do
+      [ -d "$TARGET/$c" ] && roots="${roots:+$roots,}$c"
+    done
+    # Only when it is more than the one directory the generic guess found.
+    case "$roots" in *,*) SOURCE_ROOTS="$roots" ;; esac
+  fi
+  return 0
+}
+
 detect_stack() {
   STACK="unknown"; PKG=""; HAS_UI="unknown"
   DEV_CMD="NEEDS_REVIEW"; TEST_CMD="NEEDS_REVIEW"; SINGLE_TEST_CMD="NEEDS_REVIEW"
@@ -381,17 +491,23 @@ detect_stack() {
     fi
   fi
 
+  detect_layout
+
   # Directories where a fifth near-duplicate of an existing thing tends to
   # appear. Guessed from what is actually on disk; the profile marks it for
-  # confirmation like every other detected value.
+  # confirmation like every other detected value. A root with a `*` segment
+  # (`packages/*/src`) is checked by expanding it, and the surface keeps the
+  # `*` so it covers every package, including ones added later.
+  set -f   # roots are patterns here; any_dir expands them against $TARGET, not $PWD
   for d in components Components pages Pages services Services hooks lib; do
     for r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' ') "$FRONTEND_ROOT"; do
       case "$r" in ""|NEEDS_REVIEW) continue ;; esac
-      [ -d "$TARGET/$r/$d" ] || continue
+      any_dir "$r/$d" || continue
       case ",$SHARED_SURFACES," in *",$r/$d,"*) continue ;; esac
       SHARED_SURFACES="${SHARED_SURFACES:+$SHARED_SURFACES,}$r/$d"
     done
   done
+  set +f
 
   [ -f "$TARGET/go.mod" ]    && { STACK="Go";   TEST_CMD="go test ./..."; BUILD_CMD="go build ./..."
                                    [ "$AUDIT_CMD" = "NEEDS_REVIEW" ] && AUDIT_CMD="govulncheck ./..."; }

@@ -255,21 +255,52 @@ for _pair in "Format command (fixes)|$FORMAT_COMMAND" "Type-check command|$TYPEC
   esac
 done
 
-# Path-ish fields must be paths, not globs or traversals: they are anchored into
-# the gate's own regexes, and a `..` there would widen the guard rather than
-# narrow it.
+# Path-ish fields must be paths, not free-form globs or traversals: they are
+# anchored into the gate's own regexes, and a `..` there would widen the guard
+# rather than narrow it.
+#
+# ONE wildcard is allowed: `*` as a WHOLE path segment (`packages/*/src`,
+# `apps/*`, `services/*/app`). Monorepos and opinionated layouts put the same
+# kind of code one directory down in every package, and refusing that left
+# them with two bad choices -- list every package by hand and fall out of date
+# the day one is added, or guard the whole `packages/` tree including its
+# configs. A whole-segment `*` compiles to `[^/]+`: exactly one directory name,
+# never a slash, so it cannot reach across a boundary. Partial segments
+# (`src*`), `**`, `?`, and a bare `*` are still refused -- each of those is a
+# pattern whose reach you cannot read off the profile.
+_bad_path_list() {  # _bad_path_list <value> -> prints the reason, returns 0 if bad
+  local v="$1" e s
+  case "$v" in *..*|*'?'*|/*|*'**'*) echo "'..', '?', '**' or a leading '/'"; return 0 ;; esac
+  local OLDIFS="$IFS"; IFS=','
+  for e in $v; do
+    e="${e//[[:space:]]/}"
+    [ -n "$e" ] || continue
+    [ "$e" = '*' ] && { IFS="$OLDIFS"; echo "a bare '*' (that is the whole repository)"; return 0; }
+    IFS='/'
+    for s in $e; do
+      case "$s" in *'*'*) [ "$s" = '*' ] || { IFS="$OLDIFS"; echo "a partial-segment wildcard ('$s')"; return 0; } ;; esac
+    done
+    IFS=','
+  done
+  IFS="$OLDIFS"
+  return 1
+}
+set -f   # the values below are patterns to validate, never globs to expand here
 for _pair in "Source roots|$SOURCE_ROOTS" "Test root|$TEST_ROOT" "Shared surfaces|$SHARED_SURFACES"; do
   _label="${_pair%%|*}"; _val="${_pair#*|}"
   case "$_val" in ""|NEEDS_REVIEW|n/a) continue ;; esac
-  case "$_val" in
-    *..*|*'*'*|*'?'*|/*)
-      c_red "error: '$_label' must be repo-relative directory names, comma-separated."
-      c_dim "  value: $_val"
-      c_dim "  No globs, no '..', no leading '/'. These are compiled into the gate's"
-      c_dim "  path patterns, where a wildcard widens the guard instead of narrowing it."
-      exit 1 ;;
-  esac
+  if _why=$(_bad_path_list "$_val"); then
+    set +f
+    c_red "error: '$_label' must be repo-relative directories, comma-separated."
+    c_dim "  value: $_val"
+    c_dim "  contains $_why."
+    c_dim "  Allowed: plain paths (src, app/Http) and '*' as a whole segment"
+    c_dim "  (packages/*/src). These compile into the gate's path patterns, where a"
+    c_dim "  wildcard you cannot read the reach of widens the gate in ways nobody chose."
+    exit 1
+  fi
 done
+set +f
 
 
 [ -n "$SOURCE_ROOTS" ]  || die "could not read 'Source roots' from the profile"
@@ -280,6 +311,27 @@ done
 # silently WIDENING the guard rather than narrowing it. A directory name is
 # not a pattern; every regex metacharacter in it must mean itself.
 _ere_escape() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
+
+# A profile path -> its ERE. Segment by segment: a whole-segment `*` becomes
+# `[^/]+` (one directory name, never a slash); every other segment is
+# _ere_escape'd so its characters mean themselves.
+_path_ere() {
+  local out="" seg OLDIFS="$IFS"
+  set -f; IFS='/'
+  for seg in $1; do
+    [ -n "$seg" ] || continue
+    if [ "$seg" = '*' ]; then seg='[^/]+'; else seg="$(_ere_escape "$seg")"; fi
+    out="${out:+$out/}$seg"
+  done
+  IFS="$OLDIFS"; set +f
+  printf '%s' "$out"
+}
+
+# Does a profile path (possibly with `*` segments) name at least one directory?
+_path_exists() {
+  ( set +f; shopt -s nullglob; set -- "$PROJECT"/$1
+    for _d in "$@"; do [ -d "$_d" ] && exit 0; done; exit 1 )
+}
 
 # Source roots -> an ERE the hooks can grep with:  "app,src"  ->  "^(app|src)(/|$)"
 #
@@ -299,12 +351,12 @@ OLDIFS="$IFS"; IFS=','
 for _r in $SOURCE_ROOTS; do
   _r="$(printf '%s' "$_r" | tr -d ' ')"
   [ -n "$_r" ] || continue
-  if [ -d "$PROJECT/$_r" ]; then
+  if _path_exists "$_r"; then
     _ROOTS_PRESENT=1
   else
     c_yel "  warning: declared source root '$_r' does not exist as a directory under $PROJECT."
   fi
-  SOURCE_ROOTS_ESC="${SOURCE_ROOTS_ESC:+$SOURCE_ROOTS_ESC|}$(_ere_escape "$_r")"
+  SOURCE_ROOTS_ESC="${SOURCE_ROOTS_ESC:+$SOURCE_ROOTS_ESC|}$(_path_ere "$_r")"
 done
 IFS="$OLDIFS"
 SOURCE_ROOTS_REGEX="^($SOURCE_ROOTS_ESC)(/|$)"
@@ -327,24 +379,34 @@ fi
 # Tracked code that NO declared root covers is ungated, and nothing else says
 # so. Listed, not refused: a tooling or scripts directory can be left out on
 # purpose, but it should be a decision rather than something nobody noticed.
-# Top-level directories only, from `git ls-files`, so ignored and vendored
-# trees never show up here.
-_CODE_EXT='\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|go|rs|php|rb|java|kt|kts|scala|cs|vb|fs|cshtml|razor|aspx|ascx|swift|c|cc|cpp|h|hpp|sql)$'
+# From `git ls-files`, so ignored and vendored trees never show up here.
+#
+# Judged per FILE against the compiled pattern -- the same one the gate uses --
+# not by comparing directory names. A name comparison could not see that
+# `packages/*/src` leaves `packages/web/scripts/` unguarded, and could not
+# credit `*/src` with anything. A directory that is partly covered is reported
+# one level deeper (`packages/web`), which is where the decision is made.
+_CODE_EXT='\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|go|rs|php|rb|java|kt|kts|scala|cs|vb|fs|cshtml|razor|aspx|ascx|swift|c|cc|cpp|h|hpp|sql|dart|ex|exs|erl|clj|lua)$'
 _UNCOVERED=""
 if git -C "$PROJECT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  while IFS= read -r _d; do
-    [ -n "$_d" ] || continue
-    case "$_d" in
-      .*|docs|node_modules|vendor|dist|build|out|bin|obj|coverage|test|tests|spec|__tests__) continue ;;
-    esac
-    [ -n "$TEST_ROOT" ] && [ "$_d" = "$TEST_ROOT" ] && continue
-    _covered=0
-    for _r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' '); do
-      case "$_r" in "$_d"|"$_d"/*) _covered=1 ;; esac
-    done
-    [ "$_covered" = 1 ] || _UNCOVERED="${_UNCOVERED:+$_UNCOVERED, }$_d"
-  done < <(git -C "$PROJECT" -c core.quotePath=false ls-files 2>/dev/null \
-             | grep -iE "$_CODE_EXT" | grep / | cut -d/ -f1 | sort -u)
+  _UNCOVERED=$(git -C "$PROJECT" -c core.quotePath=false ls-files 2>/dev/null \
+    | grep -iE "$_CODE_EXT" | grep / \
+    | grep -vE '(^|/)(\.[^/]*|docs|node_modules|vendor|dist|build|out|bin|obj|coverage|test|tests|spec|__tests__|__mocks__|fixtures)/' \
+    | RE="$SOURCE_ROOTS_REGEX" awk '
+        # ENVIRON, not -v: -v processes backslash escapes, which would turn an
+        # escaped `Web\.Api` back into a `.` that matches any character.
+        BEGIN { lre = tolower(ENVIRON["RE"]) }
+        { lc = tolower($0)
+          split($0, p, "/")
+          if (lc ~ lre) { covered[p[1]] = 1 } else { miss[NR] = $0 } }
+        END {
+          for (i in miss) {
+            n = split(miss[i], p, "/")
+            key = (p[1] in covered && n > 2) ? p[1] "/" p[2] : p[1]
+            seen[key] = 1
+          }
+          for (k in seen) print k
+        }' | LC_ALL=C sort | paste -sd, - | sed 's/,/, /g') || _UNCOVERED=""
 fi
 if [ -n "$_UNCOVERED" ]; then
   c_yel "  warning: code under these top-level directories is NOT guarded by the gate:"
@@ -367,20 +429,41 @@ fi
 # still reports success, which is the exact failure mode this repo exists to
 # remove. Drop the location rule when it collides and say so; test FILES are
 # still recognised by the shape of their name, so the TEST phase keeps working.
-for _r in $(printf '%s' "$SOURCE_ROOTS" | tr ',' ' '); do
-  case "$TEST_ROOT" in
-    "$_r"|"$_r"/*)
-      c_yel "  warning: test root '$TEST_ROOT' is inside source root '$_r'."
-      c_dim "    A location-based allow rule there would ungate the whole root, so it"
-      c_dim "    is dropped. Test files are still matched by filename (*_test.*,"
-      c_dim "    *.test.*, *.spec.*, test_*), which is what Go/Rust/JS layouts need."
-      TEST_ROOT=""
-      ;;
-  esac
+#
+# Test roots are a LIST now (`tests, packages/*/tests`): a monorepo has one per
+# package, and a Maven/Gradle tree keeps them at `src/test` beside `src/main`.
+# Each entry is checked on its own, so one colliding entry is dropped without
+# taking the others with it. The collision test runs the entry through the
+# SAME compiled source-root pattern the gate uses, case-insensitively -- the
+# guard is case-folded, so an allow rule that only collides in another case
+# still collides.
+case "$TEST_ROOT" in NEEDS_REVIEW|n/a) TEST_ROOT="" ;; esac
+_KEPT_TESTS=""; TEST_ROOTS_ESC=""
+OLDIFS="$IFS"; IFS=','; set -f
+for _t in $TEST_ROOT; do
+  IFS="$OLDIFS"
+  _t="${_t//[[:space:]]/}"; _t="${_t%/}"
+  [ -n "$_t" ] || { IFS=','; continue; }
+  if printf '%s/x\n' "$_t" | grep -qiE "$SOURCE_ROOTS_REGEX"; then
+    c_yel "  warning: test root '$_t' is inside a source root ($SOURCE_ROOTS)."
+    c_dim "    A location-based allow rule there would ungate the whole root, so it"
+    c_dim "    is dropped. Test files are still matched by filename (*_test.*,"
+    c_dim "    *.test.*, *.spec.*, test_*), which is what Go/Rust/JS layouts need."
+    c_dim "    For src/main + src/test layouts, declare 'src/main' as the source root."
+    IFS=','; continue
+  fi
+  set +f
+  _path_exists "$_t" || c_yel "  warning: declared test root '$_t' does not exist as a directory under $PROJECT."
+  set -f
+  _KEPT_TESTS="${_KEPT_TESTS:+$_KEPT_TESTS, }$_t"
+  TEST_ROOTS_ESC="${TEST_ROOTS_ESC:+$TEST_ROOTS_ESC|}$(_path_ere "$_t")"
+  IFS=','
 done
-if [ -n "$TEST_ROOT" ] && [ ! -d "$PROJECT/$TEST_ROOT" ]; then
-  c_yel "  warning: declared test root '$TEST_ROOT' does not exist as a directory under $PROJECT."
-fi
+IFS="$OLDIFS"; set +f
+TEST_ROOT="$_KEPT_TESTS"
+# Case-SENSITIVE in the hook, like every allow rule: widening a guard is safe,
+# widening an allowlist is how a bypass gets built.
+if [ -n "$TEST_ROOTS_ESC" ]; then TEST_ROOTS_REGEX="^($TEST_ROOTS_ESC)/"; else TEST_ROOTS_REGEX=""; fi
 
 if [ -n "$SHARED_SURFACES" ]; then
   SHARED_SURFACES_ESC=""
@@ -388,8 +471,8 @@ if [ -n "$SHARED_SURFACES" ]; then
   for _s in $SHARED_SURFACES; do
     _s="$(printf '%s' "$_s" | tr -d ' ')"
     [ -n "$_s" ] || continue
-    [ -d "$PROJECT/$_s" ] || c_yel "  warning: declared shared surface '$_s' does not exist as a directory under $PROJECT."
-    SHARED_SURFACES_ESC="${SHARED_SURFACES_ESC:+$SHARED_SURFACES_ESC|}$(_ere_escape "$_s")"
+    _path_exists "$_s" || c_yel "  warning: declared shared surface '$_s' does not exist as a directory under $PROJECT."
+    SHARED_SURFACES_ESC="${SHARED_SURFACES_ESC:+$SHARED_SURFACES_ESC|}$(_path_ere "$_s")"
   done
   IFS="$OLDIFS"
   SHARED_SURFACE_REGEX="^($SHARED_SURFACES_ESC)/"
@@ -418,10 +501,30 @@ case "$EXTRA_TEST_PATTERNS_RAW" in
     ;;
 esac
 
-# Globs for the rules
-BACKEND_GLOB="${SOURCE_ROOTS%%,*}/**/*"
+# Globs for the rules' `paths:` frontmatter, which is a YAML LIST. Every root,
+# not the first: with only the first, `backend.md` and `security.md` loaded for
+# `apps/api` and silently never for `apps/worker`. The template holds one
+# `  - "{{BACKEND_GLOB}}"` line, so the join closes that item and opens the
+# next one -- the file still reads as one item per root.
+_yaml_globs() {  # _yaml_globs <comma list>
+  local out="" e OLDIFS="$IFS"
+  set -f; IFS=','
+  for e in $1; do
+    e="${e//[[:space:]]/}"; e="${e%/}"
+    [ -n "$e" ] || continue
+    out="${out:+$out\"
+  - \"}$e/**/*"
+  done
+  IFS="$OLDIFS"; set +f
+  printf '%s' "$out"
+}
+BACKEND_GLOB="$(_yaml_globs "$SOURCE_ROOTS")"
 FRONTEND_GLOB="${FRONTEND_ROOT}/**/*"
-TEST_GLOB="${TEST_ROOT}/**/*"
+# No location-based test root left (none declared, or every one collided with a
+# source root): the testing rule follows the test FILES instead.
+if [ -n "$TEST_ROOT" ]; then TEST_GLOB="$(_yaml_globs "$TEST_ROOT")"; else TEST_GLOB="**/*.test.*\"
+  - \"**/*_test.*\"
+  - \"**/test_*"; fi
 
 # Case globs for post-edit.sh
 FORMAT_GLOB='*.ts|*.tsx|*.js|*.jsx|*.vue|*.php|*.py|*.go|*.rs'
@@ -436,6 +539,7 @@ c_dim "  typecheck: $TYPECHECK_COMMAND"
 c_dim "  audit:     $DEPENDENCY_AUDIT_COMMAND"
 c_dim "  protected: $SOURCE_ROOTS_REGEX"
 c_dim "  reuse gate: ${SHARED_SURFACE_REGEX:-(off — none declared)}"
+c_dim "  test roots: ${TEST_ROOTS_REGEX:-(none — test files matched by name only)}"
 echo
 
 # Literal string replacement via awk. No sed delimiters, so values may safely
@@ -481,6 +585,7 @@ subst() {
     "EXTRA_TEST_PATTERNS=$EXTRA_TEST_PATTERNS" \
     "FRONTEND_ROOT=$FRONTEND_ROOT" \
     "TEST_ROOT=$TEST_ROOT" \
+    "TEST_ROOTS_REGEX=$TEST_ROOTS_REGEX" \
     "TOKEN_FILE=$TOKEN_FILE" \
     "HAS_UI=$HAS_UI" \
     "BACKEND_GLOB=$BACKEND_GLOB" \

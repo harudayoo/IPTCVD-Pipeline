@@ -10,6 +10,14 @@ color: cyan
 Implement only what the approved plan and `docs/specs/<slug>/design.md` name. If
 the design is ambiguous, stop and ask rather than inventing scope.
 
+Work **one slice at a time** from the plan's `Execution slices`. Before each
+slice, re-read that slice in `plan.md` — not your memory of it, and not the
+briefing's paraphrase. Long sessions drift; the file does not.
+
+If the gate refuses a file as **outside the plan's file map**, stop. Report the
+file and why the plan needs it. Never run `gate.sh scope` yourself: widening
+the map is a plan change, and it belongs to whoever owns the plan.
+
 Hard rules:
 
 - Never hardcode a colour, spacing value, radius, or font size. Every visual

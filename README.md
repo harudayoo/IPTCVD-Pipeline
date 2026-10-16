@@ -194,7 +194,9 @@ Pick by what you can afford to run every day, not by what is impressive.
 
 **Pro** — Opus and Sonnet share one usage pool. This roster spends Opus exactly
 once per feature, on the plan critique, which is the one place a wrong answer is
-expensive to reverse. Everything else is Sonnet, sequential. If you are new to
+expensive to reverse. Everything else is Sonnet, sequential, and review is
+Sonnet too: on Pro, the recorded `scope` is what holds the build to the plan,
+not a second Opus pass. If you are new to
 this, start here even on a bigger plan: it is the smallest thing that still
 enforces every gate.
 
@@ -249,6 +251,24 @@ Two traps the installer will flag but cannot fix for you:
   `--watch=false`).
 - **Lint vs format.** The post-edit hook wants the command that *fixes*, not
   the one that *checks*.
+
+**Your layout, whatever it is.** `Source roots`, `Test root` and `Shared
+surfaces` are comma-separated paths, and `*` is allowed as a whole path segment
+(one directory name, never a slash). The installer detects the common shapes;
+anything else, you write down:
+
+| Layout | Source roots | Test root |
+|---|---|---|
+| Monorepo (workspaces, Nx, Turbo, Cargo/Go workspaces) | `apps/*/src, packages/*/src` | `apps/*/tests, packages/*/tests` |
+| Maven / Gradle | `src/main` | `src/test` |
+| Rails | `app, lib` | `spec` |
+| Next.js-style, no `src/` | `app, components, lib` | `tests` |
+
+A `*` root guards a package added next month without a profile edit. `src*`,
+`**` and `?` are refused: nobody could read off the profile what they reach.
+`configure.sh` lists tracked code no root covers, judged per file against the
+compiled pattern, so a partly covered package (`packages/api/scripts`) is
+named, not hidden behind its covered sibling.
 
 ### 3. Configure
 
@@ -378,7 +398,8 @@ placeholder nothing substitutes leaves a hook inert forever.
 ├── rules/           path-scoped standards, loaded only when a match is read
 ├── hooks/           gate-check, bash-gate, bash-audit, filter-output, post-edit,
 │                    doc-check, session-log, prompt-context
-├── scripts/         gate.sh, hook-integrity.sh, ratchet.sh, coverage-gate.sh
+├── scripts/         gate.sh, hook-integrity.sh, ratchet.sh, coverage-gate.sh,
+│                    layout-map.sh, savings.sh
 ├── agent-memory/    committed — this is the institutional memory
 ├── workflows/       Max 20x only
 └── state/           gate.json, studio.json, doc-map.json, hooks.sha256,
@@ -423,7 +444,8 @@ specialists: `system-architect`, `red-team-critic`, `backend-engineer`,
 
 Phases: `idea → plan → test → create → verify → document`.
 
-Verify dispatches `code-reviewer`, `security-auditor` and `qa-runner` in
+Verify dispatches `code-reviewer` (on Opus, checking the Sonnet build against
+the Opus plan and every logged scope change), `security-auditor` and `qa-runner` in
 parallel from one call. Adds `/debate` and `/design-tokens`, and the
 `database.md` rule.
 
@@ -444,8 +466,10 @@ Six phase playbooks (`/phase-idea` … `/phase-document`) instead of one
 and telemetry keys wired but switched off.
 
 Model routing follows one policy across every tier: **haiku** for mechanical
-scan work, **sonnet** for building, **opus** for irreversible decisions and
-adversarial reasoning. The installer prints which agents are on Opus, because
+scan work, **sonnet** for building, **opus** for irreversible decisions,
+adversarial reasoning, and on Max and Max 20x for checking the build against
+the plan (`code-reviewer`). Opus plans, Sonnet builds inside the recorded
+scope, Opus verifies. The installer prints which agents are on Opus, because
 that is where the cost is.
 
 ### The eight hooks — identical on every tier
@@ -557,6 +581,7 @@ bash .claude/scripts/gate.sh create \
 | `red` | every guarded edit | the test failing *now*, or `"n/a: <why>"` |
 | `reuse` | **creating** a file in a shared-surface directory | reuse X / extend X / new because X cannot Y |
 | `deps` | editing a dependency manifest | what you checked first, and why it does not cover this |
+| `scope` | once recorded, every guarded edit | the plan's file map: a source file outside it is refused |
 
 `gate.sh` refuses a keystroke: a one-word `--problem`, or a bare `--red n/a`
 with no reason, is rejected. The hook cannot judge whether a change is testable,
@@ -569,8 +594,9 @@ uses `advance`, which carries the notes forward:
 
 ```bash
 bash .claude/scripts/gate.sh plan                 # source stays blocked
+bash .claude/scripts/gate.sh scope "src/dues/*,src/http/DuesController.ts"   # the plan's file map
 bash .claude/scripts/gate.sh test
-bash .claude/scripts/gate.sh create --problem "…" --red "…"   # source opens
+bash .claude/scripts/gate.sh create --problem "…" --red "…"   # source opens, inside the map only
 bash .claude/scripts/gate.sh advance verify       # stays open for review fixes
 bash .claude/scripts/gate.sh advance document     # closes
 bash .claude/scripts/gate.sh idle                 # re-arms for the next change
@@ -595,6 +621,24 @@ manifests sit outside every source root, so both hooks waved them through.
 Lockfile restores (`npm ci`, `composer install`) and `npm audit fix` stay
 ungated: blocking a cold checkout, or the remediation path for a known CVE,
 costs more than the note it would collect.
+
+`scope` exists because the plan and the build run on different models. Opus
+writes the plan; Sonnet executes it, over a session long enough for the start of
+the context to stop being attended to. "No change outside the plan's file map"
+was a sentence in every implementer prompt, and a sentence is the first thing a
+long build drifts past. Recorded with `gate.sh scope` from the plan's `Scope:`
+line, it is a hook: an edit to a file the plan never named is refused, and the
+engineer is told to report the gap rather than route around it. Widening it
+mid-slice is allowed, because plans are sometimes wrong, but every change is a
+`SCOPE` row in `gate-log.tsv` with the map it replaced, and `code-reviewer` (on
+Opus) treats a widening with no matching plan amendment as a BLOCKER. Test files
+and docs are never scope-limited.
+
+The plan is written to be executed one **slice** at a time: exact files, the
+test it turns green, signatures copied rather than paraphrased, numbered steps,
+one done-command. The conductor briefs one slice per dispatch and checks its
+diff before the next. That is the other half of keeping a cheaper model on an
+expensive plan: nothing left to interpret is nothing to interpret differently.
 
 ### The gate cannot be the thing that guards the gate
 
@@ -937,6 +981,37 @@ to definition" replaces a grep plus reading three candidate files.
 
 Two always-on MCP servers maximum. Everything heavier gets scoped to a single
 agent's frontmatter, the way `qa-runner` does with Playwright.
+
+### What agents read instead of the tree
+
+Every fresh subagent starts knowing nothing, and the default cost of that is
+re-reading the repository to rediscover its shape. Two maps replace that pass:
+
+- **`layout-map.sh`** (installed) writes `.claude/skills/codebase-map/layout.md`
+  from `git ls-files` and the compiled roots: every directory each root matches,
+  test roots, shared surfaces, and code nothing guards. It records the commit it
+  describes, and `--check` fails when a directory appears or leaves a root, not
+  on every commit. `doc-writer` re-runs it in the DOCUMENT phase.
+- **graphify** (optional, [graphify.com](https://graphify.com/integrations/claude-code)) builds a
+  code graph by parsing the code itself with tree-sitter. When `graphify-out/` exists, the planners and
+  `code-reviewer` read its report before grepping, and treat INFERRED or
+  AMBIGUOUS edges as leads to open, never as citations. Use the graphify CLI
+  directly; **do not let its installer register hooks or edit `CLAUDE.md`**.
+  It adds hooks that run before tool calls, which `hook-integrity.sh` would flag
+  as tampering, and in the `--home` layout it writes into the repository.
+  Rebuild it in the DOCUMENT phase alongside the layout map; `layout.md`
+  reports how many commits behind HEAD it is.
+
+An Obsidian vault reading `docs/` through a symlink (DESIGN-RATIONALE §7) is
+still a good way for **you** to browse across projects. It is not a substitute
+for the two maps above as the thing agents orient from: a vault cannot tell
+you when it stopped being true, and these can.
+
+A persistent-memory MCP server (ICM and similar) is deliberately not
+recommended. Agent memory here lives in `.claude/agent-memory/`, in git,
+reviewed in PRs and pruned by `memory-curator`; a store outside git that
+injects recalled memories into every prompt is unreviewed context, which is
+the drift this pipeline exists to remove.
 
 ### Design-taste skills
 

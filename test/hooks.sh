@@ -46,6 +46,7 @@ for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post
   [ -f "$SRC/templates/common/hooks/$h" ] || continue
   sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
       -e 's|{{TEST_ROOT}}|tests|g' \
+      -e 's|{{TEST_ROOTS_REGEX}}|^(tests)/|g' \
       -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
       -e 's|{{TEST_COMMAND}}|npm test|g' \
       -e 's|{{BUILD_COMMAND}}|npm run build|g' \
@@ -502,6 +503,7 @@ fi
 # expects rather than one carrying this test's own appended line.
 sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
     -e 's|{{TEST_ROOT}}|tests|g' \
+    -e 's|{{TEST_ROOTS_REGEX}}|^(tests)/|g' \
     -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
     -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
     "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check.sh
@@ -827,7 +829,7 @@ DRIFT=0
 for c in $(grep -rhoE '/gate\.sh (advance )?[a-z]+' "$SRC"/templates/skills "$SRC"/templates/agents "$SRC"/templates/tiers 2>/dev/null \
            | sed 's|^/gate\.sh ||; s/^advance //' | sort -u); do
   case "$c" in
-    idle|plan|test|create|verify|document|show|log|advance) ;;
+    idle|plan|test|create|verify|document|show|log|advance|scope) ;;
     *) fail "a skill names a gate.sh command that does not exist" "a known subcommand" "'$c'"; DRIFT=1 ;;
   esac
 done
@@ -940,6 +942,57 @@ grep -q "$(printf 'gate.sh\tOPEN\tcreate\t-\tred-manual')" .claude/state/gate-lo
   || fail "logs red-manual for a typed sentence with no record behind it" "a red-manual OPEN row" "$(grep OPEN .claude/state/gate-log.tsv 2>/dev/null | tail -1)"
 bash .claude/scripts/gate.sh idle >/dev/null 2>&1
 
+head_ "16b. gate-check · the plan's file map is enforced once recorded"
+# "No change outside the plan's file map" was prose in every implementer's
+# prompt. Recorded as `scope`, it is a gate: the model executing the plan can
+# no longer drift into a file the plan never named.
+SCOPED='{"phase":"create","problem":"National finance summed every chapter twice","red":"DuesTest::national_excludes_chapter fails: expected 0 got 41250","scope":"src/services/dues.ts, src/http/*"}'
+# An EXISTING file, so the new-shared-surface gate (section 4) is not what
+# answers -- every verdict below is the file map's.
+: > src/services/other.ts
+set_gate "$SCOPED"
+g "scope: a listed file is open"              "src/services/dues.ts"            0
+g "scope: a listed file, absolute spelling"   "$ABS"                            0
+g "scope: a listed file, leading ./"          "./src/services/dues.ts"          0
+g "scope: a glob entry covers its directory"  "src/http/deep/Controller.ts"     0
+g "scope: an unlisted source file is blocked" "src/services/other.ts"           2
+g "scope: unlisted, absolute spelling"        "$WORK/src/services/other.ts"     2
+g "scope: a prefix is not a match"            "src/services/dues.ts.bak"        2
+g "scope: case is not widened"                "src/services/DUES.ts"            2
+g "scope: traversal back out of a glob"       "src/http/../services/other.ts"   2
+g "scope: tests stay writable outside it"     "src/services/other.test.ts"      0
+g "scope: docs stay writable outside it"      "docs/specs/x/plan.md"            0
+b "scope: the shell door honours it too"      "sed -i 's/x/y/' src/services/other.ts" 2
+b "scope: the shell door opens in scope"      "sed -i 's/x/y/' src/services/dues.ts"  0
+set_gate '{"phase":"create","problem":"National finance summed every chapter twice","red":"DuesTest::national_excludes_chapter fails: expected 0 got 41250","scope":"src/*"}'
+g "scope: a glob is matched, never expanded"  "src/services/other.ts"           0
+
+# The CLI side: a scope recorded at the end of PLAN must survive TEST and the
+# opening of the gate, and a change to it must leave a trail.
+rm -f .claude/state/gate-log.tsv
+bash .claude/scripts/gate.sh plan >/dev/null 2>&1
+bash .claude/scripts/gate.sh scope "src/services/dues.ts" >/dev/null 2>&1 \
+  && pass "gate.sh scope records a file map" || fail "gate.sh scope records a file map" "exit 0" "nonzero"
+bash .claude/scripts/gate.sh test >/dev/null 2>&1
+grep -q '"scope":"src/services/dues.ts"' "$GATE" \
+  && pass "the file map survives into TEST" || fail "the file map survives into TEST" "scope kept" "$(cat "$GATE")"
+bash .claude/scripts/gate.sh create --problem "National finance summed every chapter twice" \
+  --red "DuesTest::national_excludes_chapter fails: expected 0 got 41250" >/dev/null 2>&1
+g "scope: carried into create without restating" "src/services/other.ts"        2
+bash .claude/scripts/gate.sh advance verify >/dev/null 2>&1
+bash .claude/scripts/gate.sh advance create >/dev/null 2>&1
+g "scope: carried through a verify round trip"   "src/services/other.ts"        2
+bash .claude/scripts/gate.sh scope "src/services/dues.ts,src/services/other.ts" >/dev/null 2>&1
+g "scope: an amended map opens the new file"     "src/services/other.ts"        0
+grep -q "SCOPE" .claude/state/gate-log.tsv && grep -q "was: src/services/dues.ts" .claude/state/gate-log.tsv \
+  && pass "a scope change is logged with the map it replaced" \
+  || fail "a scope change is logged with the map it replaced" "SCOPE row with was:" "$(cat .claude/state/gate-log.tsv 2>/dev/null)"
+bash .claude/scripts/gate.sh scope >/dev/null 2>&1 \
+  && fail "gate.sh scope refuses an empty map" "exit 1" "exit 0" || pass "gate.sh scope refuses an empty map"
+bash .claude/scripts/gate.sh idle >/dev/null 2>&1
+grep -q scope "$GATE" && fail "idle drops the file map" "no scope" "$(cat "$GATE")" || pass "idle drops the file map"
+rm -f .claude/state/gate-log.tsv .claude/state/gate.seal src/services/other.ts
+
 head_ "17. Extra test patterns: a profile-declared convention this repo does not know"
 set_gate '{"phase":"idle"}'
 # A convention outside the built-in list -- Ruby's *_spec.rb -- blocks like any
@@ -951,6 +1004,7 @@ g "an unrecognised convention still blocks" "src/services/dues_spec.rb" 2
 # main fixture (used by every other section) is unaffected.
 sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
     -e 's|{{TEST_ROOT}}|tests|g' \
+    -e 's|{{TEST_ROOTS_REGEX}}|^(tests)/|g' \
     -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
     -e 's|{{EXTRA_TEST_PATTERNS}}|\|*_spec.rb|g' \
     "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check-extra.sh
@@ -964,6 +1018,32 @@ EXTRA_G() {  # EXTRA_G <label> <path> <want-exit>
 EXTRA_G "a declared extra pattern is allowed"        "src/services/dues_spec.rb" 0
 EXTRA_G "an unrelated file is still guarded"         "src/services/dues.rb"      2
 rm -f .claude/hooks/gate-check-extra.sh
+
+head_ "18. A whole-segment * root (monorepos) guards every spelling"
+# configure.sh compiles packages/*/src to `[^/]+` for the one segment. The
+# absolute-path fallback derives case patterns from that regex, and a literal
+# `[^/]+` there matches nothing -- a silent ALLOW for exactly the spelling
+# Claude Code sends when root stripping cannot reduce it.
+sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(packages/[^/]+/src)(/\|$)|g' \
+    -e 's|{{TEST_ROOTS_REGEX}}|^(packages/[^/]+/tests)/|g' \
+    -e 's|{{SHARED_SURFACE_REGEX}}||g' \
+    -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
+    "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check-glob.sh
+GLOB_G() {
+  local label="$1" path="$2" want="$3" got
+  printf '{"tool_input":{"file_path":"%s"}}' "$(esc_json "$path")" \
+    | bash .claude/hooks/gate-check-glob.sh >/dev/null 2>&1
+  got=$?
+  [ "$got" = "$want" ] && pass "$label" || fail "$label" "exit $want" "exit $got"
+}
+set_gate '{"phase":"idle"}'
+GLOB_G "glob root: relative"                      "packages/web/src/a.ts"           2
+GLOB_G "glob root: unreducible absolute path"     "/elsewhere/packages/web/src/a.ts" 2
+GLOB_G "glob root: unreducible Windows path"      'D:\\other\\packages\\web\\src\\a.ts' 2
+GLOB_G "glob root: one segment, not a slash"      "packages/src/a.ts"               0
+GLOB_G "glob test root: writable"                 "packages/web/tests/a.ts"         0
+GLOB_G "glob test root: cannot open src"          "packages/web/src/tests/a.ts"     2
+rm -f .claude/hooks/gate-check-glob.sh
 
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && { printf 'A guard that fails its own bypass suite is not a guard.\n'; exit 1; }

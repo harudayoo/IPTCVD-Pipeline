@@ -166,6 +166,14 @@ OUT=$(cd "$REPO" && printf '{"prompt":"hi"}' | bash "$H/prompt-context.sh" 2>/de
 case "$OUT" in *"$HN"*"never create .claude/"*) ok "every prompt carries the home and the do-not-write rule" ;; *) no "every prompt carries the home and the do-not-write rule" "$OUT" ;; esac
 repo_is_clean "repository untouched after the hooks ran"
 
+hd "7b. The generated layout map lives in the home, and describes the project"
+bash "$HOME_D/.claude/scripts/layout-map.sh" >"$W/lm.log" 2>&1 \
+  && ok "layout-map.sh runs from the home" || no "layout-map.sh runs from the home" "$(tail -2 "$W/lm.log")"
+grep -q '`src/services`' "$HOME_D/.claude/skills/codebase-map/layout.md" 2>/dev/null \
+  && ok "layout.md maps the project's code" \
+  || no "layout.md maps the project's code" "$(head -20 "$HOME_D/.claude/skills/codebase-map/layout.md" 2>/dev/null | tr '\n' ' ')"
+repo_is_clean "repository untouched after the layout map was built"
+
 hd "8. Refused layouts"
 mkdir -p "$W/outer/repo2"
 ( cd "$W/outer/repo2" && git init -q ) >/dev/null 2>&1

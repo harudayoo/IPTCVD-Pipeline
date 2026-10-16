@@ -108,6 +108,85 @@ $S/configure.sh --target "$d" >/dev/null 2>&1 \
   && no "configure accepted roots that exist nowhere in the repo" \
   || ok "configure refuses roots that exist nowhere in the repo"
 
+hd "A3. Layouts the old literal roots could not describe"
+# Field report: monorepos, Maven trees and personal layouts each had code in
+# places a list of literal top-level directory names could not express, so it
+# was either left unguarded or guarded too broadly.
+# gc <dir> <path> -> the gate-check exit code for that path, gate CLOSED.
+gc() { ( cd "$1" && printf '{"tool_input":{"file_path":"%s"}}' "$2" \
+         | bash .claude/hooks/gate-check.sh >/dev/null 2>&1; echo $? ); }
+
+d="$W/mono"; rm -rf "$d"; mkdir -p "$d"
+( cd "$d" && git init -q . && git config user.email t@t && git config user.name t
+  mkdir -p packages/web/src packages/web/tests packages/api/src packages/api/tests packages/api/scripts
+  echo 'export const a=1' > packages/web/src/a.ts; echo 'export const b=1' > packages/api/src/b.ts
+  echo 'x' > packages/api/scripts/seed.ts
+  echo '{"name":"m","private":true,"workspaces":["packages/*"],"scripts":{"test":"vitest run"}}' > package.json
+  git add -A && git commit -qm i )
+$S/install.sh --plan pro --target "$d" >/dev/null 2>&1
+grep -qE '^\| Source roots \| packages/\*/src \|' "$d/docs/setup/PROFILE.md" \
+  && ok "monorepo: detected as packages/*/src" \
+  || no "monorepo: roots not detected ($(grep 'Source roots' "$d/docs/setup/PROFILE.md"))"
+grep -qE '^\| Test root \| packages/\*/tests \|' "$d/docs/setup/PROFILE.md" \
+  && ok "monorepo: per-package test roots detected" \
+  || no "monorepo: test roots not detected ($(grep 'Test root' "$d/docs/setup/PROFILE.md"))"
+sed -i 's/NEEDS_REVIEW/true/g' "$d/docs/setup/PROFILE.md"
+out=$($S/configure.sh --target "$d" 2>&1 | strip)
+case "$out" in
+  *"NOT guarded"*packages/api*) ok "configure names the partly-covered package (packages/api/scripts)" ;;
+  *) no "configure did not flag packages/api/scripts as unguarded" ;;
+esac
+[ "$(gc "$d" packages/web/src/a.ts)" = 2 ]        && ok "monorepo: a package's source is guarded"        || no "monorepo: packages/web/src not guarded"
+[ "$(gc "$d" packages/billing/src/new.ts)" = 2 ]  && ok "monorepo: a package added later is guarded"     || no "monorepo: a new package is not guarded"
+[ "$(gc "$d" "$d/packages/api/src/b.ts")" = 2 ]   && ok "monorepo: absolute spelling is guarded"         || no "monorepo: absolute spelling walks through"
+[ "$(gc "$d" packages/web/tests/a.ts)" = 0 ]      && ok "monorepo: a package's test root stays writable" || no "monorepo: test root blocked"
+[ "$(gc "$d" packages/web/src/tests/a.ts)" = 2 ]  && ok "monorepo: 'tests' inside src is not a test root" || no "monorepo: src/tests/ walked through as a test root"
+[ "$(gc "$d" packages/web/package.json)" = 0 ]    && ok "monorepo: package config outside src is not over-guarded" || no "monorepo: packages/web/package.json blocked"
+( cd "$d" && bash "$S/verify.sh" --target . >/dev/null 2>&1 ) \
+  && ok "monorepo: verify.sh passes on a glob root" || no "monorepo: verify.sh fails on a glob root"
+grep -q 'packages/\*/src/\*\*/\*' "$d/.claude/rules/backend.md" \
+  && ok "monorepo: path-scoped rules load for every package" || no "monorepo: backend.md paths miss the glob root"
+
+# The generated layout map: what every fresh subagent would otherwise re-read
+# the tree to learn. It must name the real shape, and --check must fail on a
+# new package but not on an ordinary edit.
+LM="$d/.claude/skills/codebase-map/layout.md"
+( cd "$d" && bash .claude/scripts/layout-map.sh >/dev/null 2>&1 )
+grep -q '`packages/web/src`' "$LM" 2>/dev/null && grep -q '`packages/api/src`' "$LM" \
+  && ok "layout-map: names every package root a glob matches" || no "layout-map: package roots missing from layout.md"
+grep -A3 'NOT guarded' "$LM" 2>/dev/null | grep -q '`packages/api`' \
+  && ok "layout-map: lists the unguarded code" || no "layout-map: unguarded packages/api/scripts not listed"
+( cd "$d" && echo 'export const c=1' > packages/web/src/c.ts && git add packages && git commit -qm edit \
+  && bash .claude/scripts/layout-map.sh --check >/dev/null 2>&1 ) \
+  && ok "layout-map --check: an edit inside known dirs is still current" || no "layout-map --check: stale on an ordinary edit"
+( cd "$d" && mkdir -p packages/billing/src && echo 'x' > packages/billing/src/a.ts && git add packages && git commit -qm pkg \
+  && bash .claude/scripts/layout-map.sh --check >/dev/null 2>&1 ) \
+  && no "layout-map --check: a new package did not make the map stale" || ok "layout-map --check: a new package makes the map stale"
+
+d="$W/maven"; rm -rf "$d"; mkdir -p "$d"
+( cd "$d" && git init -q . && git config user.email t@t && git config user.name t
+  mkdir -p src/main/java/app src/test/java/app
+  echo 'class A {}' > src/main/java/app/A.java; echo 'class ATest {}' > src/test/java/app/ATest.java
+  echo '<project/>' > pom.xml; git add -A && git commit -qm i )
+$S/install.sh --plan pro --target "$d" >/dev/null 2>&1
+grep -qE '^\| Source roots \| src/main \|' "$d/docs/setup/PROFILE.md" && grep -qE '^\| Test root \| src/test \|' "$d/docs/setup/PROFILE.md" \
+  && ok "maven: src/main + src/test detected" \
+  || no "maven: not detected ($(grep -E 'Source roots|Test root' "$d/docs/setup/PROFILE.md" | tr '\n' ' '))"
+sed -i 's/NEEDS_REVIEW/true/g' "$d/docs/setup/PROFILE.md"
+$S/configure.sh --target "$d" >/dev/null 2>&1
+[ "$(gc "$d" src/main/java/app/A.java)" = 2 ]       && ok "maven: main source guarded"      || no "maven: src/main not guarded"
+[ "$(gc "$d" src/test/java/app/Helper.java)" = 0 ]  && ok "maven: src/test stays writable"  || no "maven: src/test blocked (a test helper not named *Test)"
+
+d="$W/badglob"; mk "$d" node
+$S/install.sh --plan pro --target "$d" >/dev/null 2>&1
+sed -i 's/NEEDS_REVIEW/true/g' "$d/docs/setup/PROFILE.md"
+for bad in 'src*' 'src/**' '*' 'sr?'; do
+  sed -i "s#^| Source roots | [^|]* |#| Source roots | $bad |#" "$d/docs/setup/PROFILE.md"
+  $S/configure.sh --target "$d" >/dev/null 2>&1 \
+    && no "configure accepted the unreadable root pattern '$bad'" \
+    || ok "configure refuses the root pattern '$bad'"
+done
+
 # ------------------------------------------------------------- idempotency
 hd "B. Idempotency"
 d="$W/node"
