@@ -2,7 +2,7 @@
 description: Runs a change through the Idea, Plan, Test, Create, Verify, Document pipeline one gate at a time. Use to start any feature, bug fix, or non-trivial change.
 disable-model-invocation: true
 argument-hint: [description of the change]
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *) Bash(bash .claude/scripts/layout-map.sh) Bash(bash .claude/scripts/layout-map.sh *)
 ---
 
 Feature: $ARGUMENTS
@@ -25,7 +25,7 @@ approval. Never skip forward. Never combine phases.
 | 3 · test | `test-designer` | `acceptance.md` + `evidence/tests-red.txt` showing the new tests failing **for the right reason** |
 | 4 · create | `backend-engineer`, `frontend-engineer` — one owner per file set | `evidence/tests-green.txt`, diff touching only files the plan named |
 | 5 · verify | `code-reviewer`, `security-auditor`, `qa-runner` — dispatched **in parallel**, all read-only | `verification.md`, zero BLOCKERs, browser evidence |
-| 6 · document | `doc-writer` | updated `docs/` + `docs/handoff/<date>-<slug>.md` |
+| 6 · document | `doc-writer` | updated `docs/` + `docs/handoff/<date>-<slug>.md` + `layout-map.sh` re-run |
 
 ## Advancing the gate
 

@@ -58,7 +58,12 @@ if ! studio_normalise_path FILE; then
 fi
 
 PROTECTED="{{SOURCE_ROOTS_REGEX}}"
-TEST_ROOT="{{TEST_ROOT}}"
+# Test roots, compiled by configure.sh to ONE anchored ERE (tests, plus
+# packages/<one dir>/tests, say). A LIST, because a monorepo has one per
+# package; matched with bash's own =~, so no extra process on the Edit/Write
+# latency path. Never write an example of the compiled form in a comment
+# here: verify.sh reads the first such pattern in this file as the root list.
+TEST_ROOTS_RE="{{TEST_ROOTS_REGEX}}"
 SHARED_SURFACE="{{SHARED_SURFACE_REGEX}}"
 
 # $STUDIO_ROOT is set by studio_normalise_path above (via studio_find_root):
@@ -225,8 +230,9 @@ fi
 case "$FILE" in
   docs/*|.claude/*|*.md) exit 0 ;;
 esac
-if [ -n "$TEST_ROOT" ]; then
-  case "$FILE" in "$TEST_ROOT"/*) exit 0 ;; esac
+# Case-SENSITIVE, unlike the guard below: this is an allow rule.
+if [ -n "$TEST_ROOTS_RE" ] && [[ "$FILE" =~ $TEST_ROOTS_RE ]]; then
+  exit 0
 fi
 
 # A TEST FILE, identified by the shape of its FILENAME rather than by where it
@@ -273,10 +279,18 @@ case "$FILE" in
     ROOTS="${ROOTS#\(}"; ROOTS="${ROOTS%\)}"
     FILE_LC=${FILE,,}
     OLDIFS="$IFS"; IFS='|'
+    set -f
     for r in $ROOTS; do
       [ -n "$r" ] || continue
-      case "$FILE_LC" in */"${r,,}"/*) GUARDED=1 ;; esac
+      # A `*` segment compiles to `[^/]+`; as a case pattern it is `*`, which
+      # also crosses `/` -- wider, so the fail-closed direction. UNQUOTED so
+      # that `*` matches; the ERE escapes configure.sh wrote (`Web\.Api`) read
+      # as literal characters in a case pattern too.
+      r="${r//'[^/]+'/*}"
+      # shellcheck disable=SC2254
+      case "$FILE_LC" in */${r,,}/*) GUARDED=1 ;; esac
     done
+    set +f
     IFS="$OLDIFS"
     ;;
 esac

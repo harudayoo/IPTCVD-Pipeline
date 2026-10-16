@@ -42,7 +42,9 @@ citation and a concrete fix. Cover, in this order:
    test does not reach. Swallowed exceptions, unchecked returns, retries with
    no ceiling.
 4. **Duplication** — code that reimplements something this repo already has.
-   Cite the existing implementation.
+   Cite the existing implementation. When `graphify-out/` exists, ask the
+   graph what else already does this before concluding nothing does — then
+   open the file it names; an INFERRED edge is a lead, not a citation.
 5. **Readability** — naming, dead code, comments that explain what rather than
    why.
 6. **Standards** — conformance to the relevant `.claude/rules/` files.

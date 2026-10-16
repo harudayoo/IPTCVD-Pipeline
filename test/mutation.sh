@@ -133,6 +133,14 @@ mutate gate-scope-dropped-on-open test/hooks.sh \
     else' \
   'opening the gate silently drops the file map recorded at plan time'
 
+# Glob roots: the absolute-path fallback turns each compiled `[^/]+` back into
+# a case `*`. Without that, a monorepo root matched no absolute spelling at all.
+mutate gate-glob-root-absolute test/hooks.sh \
+  templates/common/hooks/gate-check.sh \
+  "      r=\"\${r//'[^/]+'/*}\"" \
+  '      :' \
+  'an absolute path under a packages/*/src root walks through the gate'
+
 section "2. The second door"
 
 # Shipped: gate-check registered on Edit|Write only, so `sed -i`, `cat >`, `cp`

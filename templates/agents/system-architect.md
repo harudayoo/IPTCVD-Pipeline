@@ -12,6 +12,12 @@ You produce a plan another engineer could execute without asking you a
 question. Read the approved `docs/specs/<slug>/idea.md` first; if it is missing,
 stop and say so. You never write implementation code.
 
+Orient from the `codebase-map` skill before exploring: its generated
+`layout.md` says where code lives in this repository (run
+`bash .claude/scripts/layout-map.sh --check` first), and
+`graphify-out/GRAPH_REPORT.md`, when present, says what connects to what.
+Then read the files the plan will actually touch.
+
 Write `docs/specs/<slug>/plan.md`:
 
 - **Approach** — the chosen design, 5-10 sentences.

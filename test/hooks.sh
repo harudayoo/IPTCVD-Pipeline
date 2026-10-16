@@ -46,6 +46,7 @@ for h in _guard.sh gate-check.sh bash-gate.sh filter-output.sh doc-check.sh post
   [ -f "$SRC/templates/common/hooks/$h" ] || continue
   sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
       -e 's|{{TEST_ROOT}}|tests|g' \
+      -e 's|{{TEST_ROOTS_REGEX}}|^(tests)/|g' \
       -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
       -e 's|{{TEST_COMMAND}}|npm test|g' \
       -e 's|{{BUILD_COMMAND}}|npm run build|g' \
@@ -502,6 +503,7 @@ fi
 # expects rather than one carrying this test's own appended line.
 sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
     -e 's|{{TEST_ROOT}}|tests|g' \
+    -e 's|{{TEST_ROOTS_REGEX}}|^(tests)/|g' \
     -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
     -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
     "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check.sh
@@ -1002,6 +1004,7 @@ g "an unrecognised convention still blocks" "src/services/dues_spec.rb" 2
 # main fixture (used by every other section) is unaffected.
 sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(src)(/\|$)|g' \
     -e 's|{{TEST_ROOT}}|tests|g' \
+    -e 's|{{TEST_ROOTS_REGEX}}|^(tests)/|g' \
     -e 's|{{SHARED_SURFACE_REGEX}}|src/(components\|services)/|g' \
     -e 's|{{EXTRA_TEST_PATTERNS}}|\|*_spec.rb|g' \
     "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check-extra.sh
@@ -1015,6 +1018,32 @@ EXTRA_G() {  # EXTRA_G <label> <path> <want-exit>
 EXTRA_G "a declared extra pattern is allowed"        "src/services/dues_spec.rb" 0
 EXTRA_G "an unrelated file is still guarded"         "src/services/dues.rb"      2
 rm -f .claude/hooks/gate-check-extra.sh
+
+head_ "18. A whole-segment * root (monorepos) guards every spelling"
+# configure.sh compiles packages/*/src to `[^/]+` for the one segment. The
+# absolute-path fallback derives case patterns from that regex, and a literal
+# `[^/]+` there matches nothing -- a silent ALLOW for exactly the spelling
+# Claude Code sends when root stripping cannot reduce it.
+sed -e 's|{{SOURCE_ROOTS_REGEX}}|^(packages/[^/]+/src)(/\|$)|g' \
+    -e 's|{{TEST_ROOTS_REGEX}}|^(packages/[^/]+/tests)/|g' \
+    -e 's|{{SHARED_SURFACE_REGEX}}||g' \
+    -e 's|{{EXTRA_TEST_PATTERNS}}||g' \
+    "$SRC/templates/common/hooks/gate-check.sh" > .claude/hooks/gate-check-glob.sh
+GLOB_G() {
+  local label="$1" path="$2" want="$3" got
+  printf '{"tool_input":{"file_path":"%s"}}' "$(esc_json "$path")" \
+    | bash .claude/hooks/gate-check-glob.sh >/dev/null 2>&1
+  got=$?
+  [ "$got" = "$want" ] && pass "$label" || fail "$label" "exit $want" "exit $got"
+}
+set_gate '{"phase":"idle"}'
+GLOB_G "glob root: relative"                      "packages/web/src/a.ts"           2
+GLOB_G "glob root: unreducible absolute path"     "/elsewhere/packages/web/src/a.ts" 2
+GLOB_G "glob root: unreducible Windows path"      'D:\\other\\packages\\web\\src\\a.ts' 2
+GLOB_G "glob root: one segment, not a slash"      "packages/src/a.ts"               0
+GLOB_G "glob test root: writable"                 "packages/web/tests/a.ts"         0
+GLOB_G "glob test root: cannot open src"          "packages/web/src/tests/a.ts"     2
+rm -f .claude/hooks/gate-check-glob.sh
 
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && { printf 'A guard that fails its own bypass suite is not a guard.\n'; exit 1; }

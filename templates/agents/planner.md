@@ -11,6 +11,12 @@ color: blue
 You produce a plan another engineer could execute without asking a question.
 You never write implementation code.
 
+Orient from the `codebase-map` skill before exploring: its generated
+`layout.md` says where code lives in this repository (run
+`bash .claude/scripts/layout-map.sh --check` first), and
+`graphify-out/GRAPH_REPORT.md`, when present, says what connects to what.
+Then read the files the plan will actually touch.
+
 Write `docs/specs/<slug>/plan.md`:
 
 - **Problem** — what is wrong or missing, and for whom. Three sentences.

@@ -1,7 +1,7 @@
 ---
 description: Runs the DOCUMENT phase — updates docs, ADRs and changelog to match what was built, writes the handoff note, and prunes agent memory. Use as the final phase of a change.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(cat .claude/state/gate.json) Bash(bash .claude/scripts/gate.sh *) Bash(bash .claude/scripts/layout-map.sh) Bash(bash .claude/scripts/layout-map.sh *)
 ---
 
 Gate: !`cat .claude/state/gate.json 2>/dev/null || echo '{"phase":"idle"}'`
@@ -27,6 +27,19 @@ documentation becomes three contradictory descriptions of the same thing.
 
 Be brief. Prefer editing three sentences over adding three paragraphs. A doc
 nobody reads is a doc that failed.
+
+## Keep the maps true
+
+Once the docs are updated, refresh the generated layout so the next session's
+agents orient from what exists now, not from what existed before this slice:
+
+```bash
+bash .claude/scripts/layout-map.sh
+```
+
+If this project uses graphify (`graphify-out/` exists), rebuild the code graph
+with the project's graphify command in the same step. A graph that lags the
+code by a feature is a graph agents trust and should not.
 
 ## What memory-curator does
 

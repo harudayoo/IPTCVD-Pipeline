@@ -23,6 +23,36 @@ A field is not CONFIRMED until its command has been executed successfully.
 | Design token file | {{TOKEN_FILE}} | |
 | Has UI | {{HAS_UI}} | |
 
+## Source roots, test roots and your layout
+
+`Source roots`, `Test root` and `Shared surfaces` are comma-separated paths,
+relative to the repo root. Plain paths (`src`, `app/Http`, `WebSite`) mean
+themselves. `*` is allowed as a **whole path segment** and matches exactly one
+directory name, never a slash:
+
+| Layout | Source roots | Test root |
+|---|---|---|
+| Single app | `src` | `tests` |
+| Monorepo (pnpm/yarn/npm workspaces, Nx, Turbo, Cargo/Go workspaces) | `apps/*/src, packages/*/src` | `apps/*/tests, packages/*/tests` |
+| Packages that keep code at their own root | `packages/*` | (leave blank: test files match by name) |
+| Maven / Gradle / sbt | `src/main` | `src/test` |
+| Rails | `app, lib` | `spec` |
+| Next.js-style, no `src/` | `app, components, lib` | `tests` |
+| Your own structure | every directory that holds code you want planned first | wherever your tests live |
+
+A `*` entry guards packages added later without editing this file. `src*`,
+`**`, `?` and a bare `*` are refused: you could not read off the profile what
+they reach. A test root inside a source root is dropped with a warning,
+because an allow rule there would ungate the root; test FILES are still
+recognised by name.
+
+`configure.sh` lists tracked code that no root covers. Leaving a directory out
+is fine when it is a decision (scripts, tooling). After configuring, run
+`bash .claude/scripts/layout-map.sh` and read
+`.claude/skills/codebase-map/layout.md`: it shows every directory the roots
+actually matched, which is the quickest way to see the profile says what you
+meant.
+
 ## Shared surfaces
 
 Comma-separated directories, relative to the repo root, where a NEW file has to
